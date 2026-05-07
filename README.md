@@ -39,6 +39,10 @@ Scenario building, ROS-bag extraction, map alignment, and trajectory snapping ar
 
 ![Single-frame LiDAR inspection](docs/assets/frame_inspector.png)
 
+**Point Cloud Trajectory**
+
+![Aggregated LIDAR Point Cloud Trajectory](docs/assets/pointcloud_traj.png)
+
 ---
 
 ## Main Features
