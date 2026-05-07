@@ -1,0 +1,115 @@
+{
+  "scene_id": "scene_001",
+  "scenario": "snow",
+  "map_name": "fortiss/Maps/fortiss/fortiss",
+  "weather": "snow",
+  "material_config_path": "C:\\Users\\Debora\\Desktop\\CARLA\\carla\\PythonAPI\\examples\\material_aware_carla_toolkit\\configs\\material_aware_tool_config.json",
+  "material_profile": "carla_default",
+  "spawn": {
+    "x": null,
+    "y": null,
+    "z": null,
+    "back_m": 0.0,
+    "z_offset": 0.5
+  },
+  "trajectory": {
+    "source": "txt",
+    "json_path": null,
+    "txt_path": "C:/Users/Debora/Downloads/trajectory2.txt",
+    "follow_mode": "teleport",
+    "z_offset": 0.5,
+    "num_poses": 0
+  },
+  "parked_vehicles": {
+    "json_path": "C:/Users/Debora/Desktop/CARLA/carla/built_from_aligned_snapped/vehicle_data_adapted_right20_rightside_left10_leftedge13.json",
+    "z_offset": 0.15,
+    "limit": 0,
+    "requested_spawn_positions": 0,
+    "seed": 42
+  },
+  "sensor_config": {
+    "cam_fov": 90.0,
+    "channels": 64,
+    "pps": 1300000,
+    "rotation_frequency": 20.0,
+    "lidar_range": 80.0,
+    "horizontal_fov": 360.0,
+    "upper_fov": 10.0,
+    "lower_fov": -30.0,
+    "mode": "material",
+    "use_base_nominal": false,
+    "display_mode_sequence": [
+      "intensity",
+      "pseudo",
+      "material"
+    ],
+    "strict_sync": false,
+    "strict_sync_timeout": 0.5,
+    "save_every": 10,
+    "save_last_seconds": 0.0
+  },
+  "calibration": {
+    "fit_range_min": 2.0,
+    "fit_range_max": 30.0,
+    "ref_range_r0": 10.0,
+    "cos_eps": 0.2,
+    "coefficients_high_to_low": [
+      0.01592119599839734,
+      -0.6848984378845165,
+      12.437483628508096
+    ],
+    "g_r0": 7.180618849502665,
+    "weather_ratio": {
+      "nominal": {
+        "asphalt": 1.0,
+        "building": 1.0,
+        "car": 1.0,
+        "sidewalk": 1.0,
+        "vegetation": 1.0,
+        "wood": 1.0,
+        "metal": 1.0,
+        "unknown": 1.0
+      },
+      "rain": {
+        "asphalt": 0.281,
+        "building": 0.122,
+        "car": 0.432,
+        "sidewalk": 0.069,
+        "vegetation": 0.89,
+        "wood": 0.58,
+        "metal": 0.66,
+        "unknown": 0.5
+      },
+      "snow": {
+        "asphalt": 0.493,
+        "building": 0.28,
+        "car": 1.538,
+        "sidewalk": 0.082,
+        "vegetation": 0.652,
+        "wood": 0.84,
+        "metal": 1.18,
+        "unknown": 0.7
+      },
+      "fog": {
+        "asphalt": 0.7,
+        "building": 0.7,
+        "car": 0.7,
+        "sidewalk": 0.7,
+        "vegetation": 0.7,
+        "wood": 0.7,
+        "metal": 0.7,
+        "unknown": 0.7
+      }
+    },
+    "nominal_base": {
+      "asphalt": 0.2,
+      "sidewalk": 0.3,
+      "vegetation": 0.7,
+      "car": 0.9,
+      "building": 0.55,
+      "wood": 0.45,
+      "metal": 0.78,
+      "unknown": 0.4
+    }
+  }
+}

@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+title: "MatSense Dashboard: A Companion App for Inspecting Material- and Weather-Aware LiDAR Datasets in CARLA"
+message: "If you use this software, please cite the associated MatSense tool paper."
+type: software
+authors:
+  - family-names: Russo
+    given-names: Debora
+year: 2026
+repository-code: "https://github.com/<your-username>/matsense-streamlit-dashboard"

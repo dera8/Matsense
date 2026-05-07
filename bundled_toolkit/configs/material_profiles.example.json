@@ -1,0 +1,30 @@
+{
+  "default_profile": "carla_default",
+  "profiles": {
+    "carla_default": {
+      "default_material": "unknown",
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "nominal_base": {
+        "asphalt": 0.20,
+        "sidewalk": 0.30,
+        "building": 0.55,
+        "vegetation": 0.70,
+        "car": 0.90,
+        "unknown": 0.40
+      }
+    }
+  }
+}
+

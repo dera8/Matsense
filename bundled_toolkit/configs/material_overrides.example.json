@@ -1,0 +1,9 @@
+{
+  "actor_ids": {
+    "1234": "wood"
+  },
+  "type_ids": {
+    "vehicle.tesla.model3": "metal",
+    "static.prop.streetbarrier": "concrete"
+  }
+}

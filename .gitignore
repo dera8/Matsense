@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.streamlit/secrets.toml
+.matsense_viewer.pid
+viewer_command.txt
+*.log
+output_dataset/
+bundled_toolkit/scripts/output_dataset/
