@@ -21,8 +21,6 @@ The repository is self-contained for artifact review:
 - it includes a small demo dataset under `sample_data/`, so the Dataset Analyzer works without CARLA;
 - it includes a minimal MatSense runtime toolkit under `bundled_toolkit/`, so the Run Viewer tab can launch the pygame viewer when CARLA is available.
 
-Scenario building, ROS-bag extraction, map alignment, and trajectory snapping are intentionally outside this dashboard release. Those workflows remain part of the main MatSense toolkit and are planned for a later dashboard version.
-
 ---
 
 ## Main Features
