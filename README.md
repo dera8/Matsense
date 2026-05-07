@@ -2,7 +2,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.34+-red.svg)](https://streamlit.io/)
-[![CARLA](https://img.shields.io/badge/CARLA-compatible-118AB2.svg)](https://carla.org/)
+[![CARLA](https://img.shields.io/badge/CARLA-0.9.16-118AB2.svg)](https://carla.org/)
 [![License](https://img.shields.io/badge/License-TBD-lightgrey.svg)](#license)
 
 > Companion repository for the MatSense tool paper  
