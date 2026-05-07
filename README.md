@@ -5,7 +5,7 @@
 [![CARLA](https://img.shields.io/badge/CARLA-0.9.16-118AB2.svg)](https://carla.org/)
 [![License](https://img.shields.io/badge/License-TBD-lightgrey.svg)](#license)
 
-> Companion repository for the MatSense tool paper  
+> Public artifact repository for the MatSense tool paper  
 > **"MatSense: Material- and Weather-Aware LiDAR Testing for Autonomous Driving Systems in CARLA"**  
 > Artifact DOI: **TBD**  
 > Screencast: **TBD**
@@ -14,12 +14,30 @@
 
 ## Overview
 
-**MatSense** is a CARLA-based tool for material- and weather-aware LiDAR testing. This repository provides the public MatSense artifact, including the Streamlit dashboard, the CARLA/pygame runtime viewer, material-aware LiDAR configuration, and a bundled demo dataset for immediate inspection.
+**MatSense** is a CARLA-based tool for material- and weather-aware LiDAR testing. This repository provides the public MatSense artifact, including the Streamlit dashboard, CARLA/pygame runtime viewer, material-aware LiDAR configuration, dataset analyzer, and a bundled demo dataset for immediate inspection.
 
 The repository is self-contained for artifact review:
 
 - it includes a small demo dataset under `sample_data/`, so the Dataset Analyzer works without CARLA;
-- it includes the MatSense runtime toolkit under `bundled_toolkit/`, so the Run Viewer tab can launch the pygame viewer when CARLA is available.
+- it includes MatSense runtime components under `bundled_toolkit/`, so the Run Viewer tab can launch the pygame viewer when CARLA is available.
+
+Scenario building, ROS-bag extraction, map alignment, and trajectory snapping are intentionally outside this dashboard release. Those workflows remain part of the main MatSense toolkit and are planned for a later dashboard version.
+
+---
+
+## Visual Overview
+
+**Trajectory-level LiDAR point cloud**
+
+![Trajectory point cloud colored by MatSense pseudo-reflectance](docs/assets/trajectory_point_cloud.png)
+
+**Material response across weather scenarios**
+
+![Material response across weather scenarios](docs/assets/material_response.png)
+
+**Single-frame CARLA intensity vs MatSense pseudo-reflectance**
+
+![Single-frame LiDAR inspection](docs/assets/frame_inspector.png)
 
 ---
 
@@ -52,6 +70,7 @@ matsense_streamlit_app
 |   |-- scripts/
 |   `-- src/material_aware_toolkit/
 |-- docs/
+|   |-- assets/
 |   `-- USER_GUIDE.md
 |-- sample_data/
 |   `-- scene_001/
@@ -64,7 +83,7 @@ matsense_streamlit_app
 `-- requirements.txt
 ```
 
-`bundled_toolkit/` is a minimal runtime copy of the MatSense viewer code and material configuration. It avoids generated datasets, caches, browser profiles, and intermediate development files.
+`bundled_toolkit/` contains the runtime components used by MatSense to launch the CARLA/pygame viewer and apply material-aware LiDAR response models. Generated outputs, caches, and experimental scenario-preparation utilities are not included in this public artifact release.
 
 For step-by-step usage instructions, see:
 
@@ -233,7 +252,7 @@ Included in this repository:
 - Streamlit dashboard;
 - bundled demo dataset;
 - dataset analyzer;
-- minimal viewer runtime toolkit;
+- CARLA/pygame runtime viewer components;
 - blue-themed interface matching the MatSense desktop launcher.
 
 Not included in this dashboard release:

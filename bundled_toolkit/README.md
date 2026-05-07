@@ -1,7 +1,7 @@
-# Bundled MatSense Runtime Toolkit
+# MatSense Runtime Components
 
-This folder contains the minimal MatSense runtime needed by the Streamlit
-dashboard to launch the CARLA/pygame viewer.
+This folder contains the runtime components used by MatSense to launch the
+CARLA/pygame viewer and apply material-aware LiDAR response models.
 
 Included files:
 
@@ -11,6 +11,12 @@ Included files:
 - `configs/material_profiles.example.json`
 - `configs/material_overrides.example.json`
 - `src/material_aware_toolkit/`
+
+Generated outputs, caches, browser profiles, and experimental
+scenario-preparation utilities are not included in this public artifact
+release. The Streamlit app can still be pointed to another local MatSense
+checkout through the sidebar or with the `MATSENSE_TOOLKIT` environment
+variable.
 
 The Run Viewer tab still requires:
 
