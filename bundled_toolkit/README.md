@@ -12,11 +12,6 @@ Included files:
 - `configs/material_overrides.example.json`
 - `src/material_aware_toolkit/`
 
-The full development toolkit is intentionally not copied here because it
-contains generated datasets, caches, browser profiles, and intermediate files.
-The Streamlit app can still be pointed to a full toolkit checkout through the
-sidebar or with the `MATSENSE_TOOLKIT` environment variable.
-
 The Run Viewer tab still requires:
 
 - a running CARLA server;
