@@ -29,13 +29,13 @@ docs/assets/trajectory_point_cloud.png
 
 ## Visual Overview
 
+****
+
+[RGB + LiDAR overlays preview](docs/assets/pygame_rgb_lidar_overlay_views.gif)
+
 **Pseudo-reflectance vista in CARLA**
 
 ![RGB view with projected LiDAR returns overlaid on the scene, plus top-down pseudo-reflectance response computed using weather and material priors](docs/assets/pseudo2.png)
-
-**Trajectory-level LiDAR point cloud**
-
-![Trajectory point cloud colored by MatSense pseudo-reflectance](docs/assets/trajectory_point_cloud.png)
 
 **Material response across weather scenarios**
 
