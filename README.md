@@ -23,8 +23,6 @@ The repository is self-contained for artifact review:
 
 Scenario building, ROS-bag extraction, map alignment, and trajectory snapping are intentionally outside this dashboard release. Those workflows remain part of the main MatSense toolkit and are planned for a later dashboard version.
 
-docs/assets/trajectory_point_cloud.png
-
 ---
 
 ## Visual Overview
