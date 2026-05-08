@@ -4,6 +4,7 @@ __pycache__/
 venv/
 .streamlit/secrets.toml
 .matsense_viewer.pid
+.streamlit_app.pid
 viewer_command.txt
 *.log
 output_dataset/

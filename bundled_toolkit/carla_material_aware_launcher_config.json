@@ -4,7 +4,7 @@
   "width": "1600",
   "height": "900",
   "fps": "20",
-  "mode": "material",
+  "mode": "camera_triple",
   "display_normalization": "percentile",
   "display_percentile": "95",
   "weather": "nominal",

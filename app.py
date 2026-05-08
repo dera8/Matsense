@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 
@@ -611,6 +612,204 @@ def point_cloud_figure(
     return fig
 
 
+def load_lidar_animation_frames(
+    scene_dir: Path,
+    scenario: str,
+    max_frames: int,
+    max_points_per_frame: int,
+) -> list[pd.DataFrame]:
+    scenario_dir = scene_dir / scenario
+    label_files = sorted((scenario_dir / "lidar_labels").glob("*.npz"))
+    if max_frames > 0:
+        label_files = label_files[:max_frames]
+    raw_dir = scenario_dir / "lidar_raw"
+    rng = np.random.default_rng(7)
+    frames: list[pd.DataFrame] = []
+    for label_path in label_files:
+        raw_path = raw_dir / label_path.name
+        if not raw_path.exists():
+            continue
+        label = np.load(label_path, allow_pickle=True)
+        raw = np.load(raw_path, allow_pickle=True)
+        if "xyz" not in raw:
+            continue
+        xyz = raw["xyz"]
+        if len(xyz) == 0:
+            continue
+        mask = (
+            (xyz[:, 0] > -12.0) &
+            (xyz[:, 0] < 45.0) &
+            (np.abs(xyz[:, 1]) < 28.0) &
+            (xyz[:, 2] > -3.0) &
+            (xyz[:, 2] < 5.0)
+        )
+        idx = np.where(mask)[0]
+        if idx.size == 0:
+            continue
+        take_n = min(max_points_per_frame, idx.size) if max_points_per_frame > 0 else idx.size
+        if take_n < idx.size:
+            idx = rng.choice(idx, size=take_n, replace=False)
+        frame_id = frame_id_from_npz(label_path) or -1
+        materials = label["material_label"].astype(str)[idx] if "material_label" in label else np.array(["unknown"] * len(idx))
+        frames.append(
+            pd.DataFrame(
+                {
+                    "plot_x": xyz[idx, 1],
+                    "plot_y": xyz[idx, 0],
+                    "material": materials,
+                    "material_color": [MATERIAL_COLORS.get(str(m), MATERIAL_COLORS["unknown"]) for m in materials],
+                    "raw_intensity": raw["intensity"][idx].astype(float) if "intensity" in raw else np.zeros(len(idx)),
+                    "pseudo_norm": label["pseudo_norm"][idx].astype(float) if "pseudo_norm" in label else np.zeros(len(idx)),
+                    "frame_id": frame_id,
+                }
+            )
+        )
+    return frames
+
+
+def lidar_animation_figure(frames: list[pd.DataFrame], scenario: str, point_size: int, point_opacity: float) -> go.Figure:
+    if not frames:
+        return go.Figure()
+    combined = pd.concat(frames, ignore_index=True)
+    x_range = [float(combined["plot_x"].min()) - 1.0, float(combined["plot_x"].max()) + 1.0]
+    y_range = [float(combined["plot_y"].min()) - 1.0, float(combined["plot_y"].max()) + 1.0]
+
+    fig = make_subplots(
+        rows=1,
+        cols=3,
+        subplot_titles=("Materials", "CARLA raw", "MatSense pseudo"),
+        horizontal_spacing=0.035,
+    )
+
+    def traces_for(frame_df: pd.DataFrame) -> list[go.Scattergl]:
+        material_mask = frame_df["material"] != "unknown"
+        material_df = frame_df[material_mask]
+        return [
+            go.Scattergl(
+                x=material_df["plot_x"],
+                y=material_df["plot_y"],
+                mode="markers",
+                marker=dict(size=point_size, opacity=point_opacity, color=material_df["material_color"]),
+                text=material_df["material"],
+                hovertemplate="material=%{text}<br>right=%{x:.2f}<br>forward=%{y:.2f}<extra></extra>",
+                showlegend=False,
+            ),
+            go.Scattergl(
+                x=frame_df["plot_x"],
+                y=frame_df["plot_y"],
+                mode="markers",
+                marker=dict(
+                    size=point_size,
+                    opacity=point_opacity,
+                    color=frame_df["raw_intensity"],
+                    colorscale=[[0, "#000000"], [0.5, "#00DCFF"], [1, "#FFFFFF"]],
+                    cmin=0,
+                    cmax=1,
+                    showscale=True,
+                    colorbar=dict(title="", x=0.64, len=0.60, thickness=12),
+                ),
+                hovertemplate="raw=%{marker.color:.3f}<br>right=%{x:.2f}<br>forward=%{y:.2f}<extra></extra>",
+                showlegend=False,
+            ),
+            go.Scattergl(
+                x=frame_df["plot_x"],
+                y=frame_df["plot_y"],
+                mode="markers",
+                marker=dict(
+                    size=point_size,
+                    opacity=point_opacity,
+                    color=frame_df["pseudo_norm"],
+                    colorscale=PSEUDO_SCALE,
+                    cmin=0,
+                    cmax=1,
+                    showscale=True,
+                    colorbar=dict(title="", x=1.0, len=0.60, thickness=12),
+                ),
+                hovertemplate="pseudo=%{marker.color:.3f}<br>right=%{x:.2f}<br>forward=%{y:.2f}<extra></extra>",
+                showlegend=False,
+            ),
+        ]
+
+    initial = traces_for(frames[0])
+    for col, trace in enumerate(initial, start=1):
+        fig.add_trace(trace, row=1, col=col)
+
+    animation_frames = []
+    for idx, frame_df in enumerate(frames):
+        frame_id = int(frame_df["frame_id"].iloc[0]) if not frame_df.empty else idx
+        animation_frames.append(
+            go.Frame(
+                name=str(idx),
+                data=traces_for(frame_df),
+                traces=[0, 1, 2],
+                layout=go.Layout(),
+            )
+        )
+    fig.frames = animation_frames
+
+    steps = [
+        {
+            "method": "animate",
+            "label": "",
+            "args": [[str(i)], {"mode": "immediate", "frame": {"duration": 350, "redraw": True}, "transition": {"duration": 0}}],
+        }
+        for i in range(len(frames))
+    ]
+    fig.update_layout(
+        template="plotly_white",
+        title=f"{scenario}: LiDAR comparison",
+        title_font_color="#073B4C",
+        height=690,
+        margin=dict(l=20, r=20, t=58, b=86),
+        updatemenus=[
+            {
+                "type": "buttons",
+                "showactive": False,
+                "x": 0.02,
+                "y": -0.10,
+                "xanchor": "left",
+                "yanchor": "top",
+                "buttons": [
+                    {
+                        "label": "Play",
+                        "method": "animate",
+                        "args": [None, {"frame": {"duration": 450, "redraw": True}, "fromcurrent": True, "transition": {"duration": 0}}],
+                    },
+                    {
+                        "label": "Pause",
+                        "method": "animate",
+                        "args": [[None], {"frame": {"duration": 0, "redraw": False}, "mode": "immediate", "transition": {"duration": 0}}],
+                    },
+                ],
+            }
+        ],
+        sliders=[
+            {
+                "active": 0,
+                "x": 0.16,
+                "y": -0.10,
+                "len": 0.78,
+                "steps": steps,
+                "currentvalue": {"prefix": ""},
+                "pad": {"t": 18, "b": 0},
+            }
+        ],
+    )
+    for col in range(1, 4):
+        fig.update_xaxes(range=x_range, scaleanchor=f"y{col}" if col > 1 else "y", scaleratio=1, title_text="", row=1, col=col)
+        fig.update_yaxes(range=y_range, title_text="", row=1, col=col)
+    fig.add_annotation(
+        text="right axis = lateral position, vertical axis = forward distance",
+        xref="paper",
+        yref="paper",
+        x=0.5,
+        y=-0.08,
+        showarrow=False,
+        font=dict(size=12, color="#5f7284"),
+    )
+    return fig
+
+
 def stop_viewer() -> str:
     if not PID_FILE.exists():
         return "No PID file found."
@@ -778,8 +977,8 @@ def dataset_analyzer(toolkit_dir: Path | None, config: dict) -> None:
         c3.metric("Mean projection", f"{summary['projection_ratio_mean'].mean():.1%}")
         c4.metric("Mean known materials", f"{summary['known_material_ratio_mean'].mean():.1%}")
 
-    tab_cloud, tab_response, tab_frame, tab_advanced = st.tabs(
-        ["Trajectory Point Cloud", "Material Response", "Frame Inspector", "Advanced Metrics"]
+    tab_cloud, tab_animation, tab_response, tab_frame, tab_advanced = st.tabs(
+        ["Trajectory Point Cloud", "Animated LiDAR Comparison", "Material Response", "Frame Inspector", "Advanced Metrics"]
     )
 
     with tab_cloud:
@@ -848,6 +1047,45 @@ def dataset_analyzer(toolkit_dir: Path | None, config: dict) -> None:
             )
             st.caption(
                 "Use Binned mean for pseudo/intensity views when scatter points overlap. Material mode uses point rendering."
+            )
+
+    with tab_animation:
+        st.subheader("Animated LiDAR Comparison")
+        st.caption("Synchronized frame-by-frame comparison of material labels, CARLA intensity, and MatSense pseudo-reflectance.")
+        c1, c2, c3, c4 = st.columns(4)
+        anim_scenario = c1.selectbox(
+            "Scenario",
+            selected,
+            index=selected.index("nominal") if "nominal" in selected else 0,
+            key="anim_scenario",
+        )
+        available_anim_frames = len(list((scene_dir / anim_scenario / "lidar_labels").glob("*.npz")))
+        default_anim_frames = max(1, min(20, available_anim_frames)) if available_anim_frames else 1
+        anim_frames = c2.number_input(
+            f"Frames ({available_anim_frames} available)",
+            min_value=1,
+            value=default_anim_frames,
+            step=5,
+            key="anim_frames",
+        )
+        anim_points = c3.number_input("Points/frame", min_value=250, value=4500, step=500, key="anim_points")
+        anim_point_size = c4.slider("Point size", min_value=1, max_value=6, value=2, step=1, key="anim_point_size")
+        anim_opacity = st.slider("Point opacity", min_value=0.10, max_value=1.00, value=0.70, step=0.05, key="anim_opacity")
+        with st.spinner("Building animated LiDAR comparison..."):
+            anim_data = load_lidar_animation_frames(scene_dir, anim_scenario, int(anim_frames), int(anim_points))
+        if not anim_data:
+            st.warning("No LiDAR frames found for the animation.")
+        else:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Available frames", available_anim_frames)
+            m2.metric("Animated frames", len(anim_data))
+            m3.metric("Max points/frame", f"{int(anim_points):,}")
+            st.plotly_chart(
+                lidar_animation_figure(anim_data, anim_scenario, int(anim_point_size), float(anim_opacity)),
+                use_container_width=True,
+            )
+            st.caption(
+                "Use Play or the frame slider to inspect the same LiDAR scan across the three views."
             )
 
     with tab_response:
@@ -1083,7 +1321,20 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
 
         c1, c2, c3 = st.columns(3)
         weather = c1.selectbox("Weather", ["nominal", "rain", "snow", "fog"], index=["nominal", "rain", "snow", "fog"].index(config.get("weather", "nominal")) if config.get("weather") in ["nominal", "rain", "snow", "fog"] else 0)
-        mode = c2.selectbox("View", ["material", "pseudo", "intensity"], index=["material", "pseudo", "intensity"].index(config.get("mode", "material")) if config.get("mode") in ["material", "pseudo", "intensity"] else 0)
+        view_options = {
+            "camera_triple": "RGB overlays: all 3",
+            "material": "Material classes",
+            "pseudo": "Pseudo-reflectance",
+            "intensity": "CARLA raw intensity",
+        }
+        mode_keys = list(view_options.keys())
+        mode_default = str(config.get("mode", "camera_triple"))
+        mode = c2.selectbox(
+            "View",
+            mode_keys,
+            index=mode_keys.index(mode_default) if mode_default in mode_keys else 0,
+            format_func=lambda key: view_options[key],
+        )
         display_normalization = c3.selectbox("Pseudo scale", ["fixed", "percentile"], index=["fixed", "percentile"].index(config.get("display_normalization", "fixed")) if config.get("display_normalization") in ["fixed", "percentile"] else 0)
 
         display_percentile = st.number_input("Display percentile", value=float(config.get("display_percentile", 95)), step=1.0)

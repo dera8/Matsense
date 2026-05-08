@@ -81,6 +81,7 @@ SEMANTIC_TO_MATERIAL = dict(_DEFAULT_PROFILE["semantic_to_material"])
 DEFAULT_MATERIAL = _DEFAULT_PROFILE["default_material"]
 DISPLAY_MODE_SEQUENCE = list(_DEFAULT_PROFILE["display_mode_sequence"])
 DISPLAY_MODE_SEQUENCE = [mode for mode in DISPLAY_MODE_SEQUENCE if mode != "material_effect"]
+CAMERA_TRIPLE_MODE = "camera_triple"
 
 BG_COLOR = (17, 20, 26)
 CARD_BG = (27, 33, 43)
@@ -208,11 +209,11 @@ def colormap_pseudo(v: np.ndarray) -> np.ndarray:
     return colormap_palette(
         v,
         [
-            (0.0, (57, 0, 153)),
-            (0.25, (158, 0, 89)),
-            (0.50, (255, 0, 84)),
-            (0.75, (255, 84, 0)),
-            (1.0, (255, 189, 0)),
+            (0.0, (7, 59, 76)),
+            (0.25, (17, 138, 178)),
+            (0.50, (6, 214, 160)),
+            (0.75, (255, 209, 102)),
+            (1.0, (239, 71, 111)),
         ],
     )
 
@@ -237,6 +238,7 @@ def mode_title(mode: str) -> str:
         "intensity": "Raw Intensity",
         "pseudo": "Pseudo Reflectance",
         "material": "Material Classes",
+        CAMERA_TRIPLE_MODE: "RGB + LiDAR Overlays",
     }.get(mode, mode.title())
 
 
@@ -245,6 +247,7 @@ def mode_description(mode: str) -> str:
         "intensity": "Direct LiDAR return strength from the sensor",
         "pseudo": "Range-corrected LiDAR response with weather/material priors",
         "material": "Semantic-material overlay for asphalt, sidewalk, building, vegetation and car",
+        CAMERA_TRIPLE_MODE: "Same CARLA camera view with material, raw intensity and pseudo-reflectance overlays",
     }.get(mode, mode)
 
 
@@ -2061,6 +2064,94 @@ class CarlaLidarViewer:
         draw_text(self.screen, self.font_small, "high", (card_rect.x + 10, y0 - 4), TEXT_MUTED)
         draw_text(self.screen, self.font_small, "low", (card_rect.x + 16, y0 + h - 10), TEXT_MUTED)
 
+    def _draw_camera_overlay_legend(self, rect: pygame.Rect, mode: str):
+        legend_w = 168 if mode == "material" else 96
+        legend_h = 142 if mode == "material" else 118
+        legend_rect = pygame.Rect(rect.right - legend_w - 18, rect.bottom - legend_h - 18, legend_w, legend_h)
+        pygame.draw.rect(self.screen, (12, 16, 24), legend_rect, border_radius=10)
+        pygame.draw.rect(self.screen, CARD_BORDER, legend_rect, width=1, border_radius=10)
+
+        if mode == "material":
+            draw_text(self.screen, self.font_small, "Material Legend", (legend_rect.x + 10, legend_rect.y + 8), TEXT_MAIN)
+            items = [
+                ("Asphalt", MATERIAL_DISPLAY_COLORS["asphalt"]),
+                ("Sidewalk", MATERIAL_DISPLAY_COLORS["sidewalk"]),
+                ("Building", MATERIAL_DISPLAY_COLORS["building"]),
+                ("Vegetation", MATERIAL_DISPLAY_COLORS["vegetation"]),
+                ("Car", MATERIAL_DISPLAY_COLORS["car"]),
+            ]
+            y = legend_rect.y + 32
+            for name, color in items:
+                pygame.draw.rect(self.screen, tuple(int(c) for c in color), pygame.Rect(legend_rect.x + 10, y, 14, 14), border_radius=3)
+                draw_text(self.screen, self.font_small, name, (legend_rect.x + 32, y - 2), TEXT_MAIN)
+                y += 20
+            return
+
+        draw_text(self.screen, self.font_small, "Scale", (legend_rect.x + 10, legend_rect.y + 8), TEXT_MAIN)
+        x0 = legend_rect.x + legend_w - 34
+        y0 = legend_rect.y + 28
+        h = legend_h - 50
+        vals = np.linspace(1.0, 0.0, h)
+        colors = colormap_intensity(vals) if mode == "intensity" else colormap_pseudo(vals)
+        for i in range(h):
+            pygame.draw.line(self.screen, tuple(int(c) for c in colors[i]), (x0, y0 + i), (x0 + 16, y0 + i))
+        pygame.draw.rect(self.screen, TEXT_MUTED, pygame.Rect(x0, y0, 16, h), width=1)
+        draw_text(self.screen, self.font_small, "high", (legend_rect.x + 10, y0 - 3), TEXT_MUTED)
+        draw_text(self.screen, self.font_small, "low", (legend_rect.x + 14, y0 + h - 11), TEXT_MUTED)
+
+    def _draw_camera_overlay_panel(self, rect: pygame.Rect, color_info: dict | None, mode: str):
+        draw_card(self.screen, rect)
+        image_rect = pygame.Rect(rect.x + 8, rect.y + 54, rect.w - 16, rect.h - 62)
+        if self.rgb_array is not None:
+            panel_image = self.rgb_array
+            if color_info is not None:
+                overlay = self.make_rgb_lidar_overlay(self.rgb_array, color_info, mode)
+                if overlay is not None:
+                    panel_image = overlay
+            rgb_surf = bgra_to_rgb_surface(panel_image)
+            scaled = pygame.transform.smoothscale(rgb_surf, (image_rect.w, image_rect.h))
+            self.screen.blit(scaled, (image_rect.x, image_rect.y))
+            self._draw_camera_overlay_legend(image_rect, mode)
+        else:
+            draw_text(self.screen, self.font_small, "Waiting for RGB sensor...", (image_rect.x + 10, image_rect.y + 10), TEXT_MUTED)
+
+        draw_text(self.screen, self.font_panel, mode_title(mode), (rect.x + 16, rect.y + 12), TEXT_MAIN)
+        draw_text_block(
+            self.screen,
+            self.font_small,
+            mode_description(mode),
+            (rect.x + 16, rect.y + 36),
+            rect.w - 32,
+            1,
+            TEXT_MUTED,
+        )
+
+    def draw_triple_camera_view(self, color_info: dict | None):
+        margin = 18
+        gap = 14
+        title_h = 62
+        title_rect = pygame.Rect(margin, margin, self.args.width - 2 * margin, title_h)
+        draw_card(self.screen, title_rect)
+        draw_text(self.screen, self.font_title, "CARLA RGB + LiDAR Overlay Comparison", (title_rect.x + 16, title_rect.y + 12))
+        subtitle = (
+            f"Weather: {self.args.weather}   |   View: material classes / CARLA raw intensity / MatSense pseudo-reflectance"
+        )
+        draw_text_block(self.screen, self.font_small, subtitle, (title_rect.x + 18, title_rect.y + 41), title_rect.w - 36, 2, TEXT_MUTED)
+
+        top = title_rect.bottom + 14
+        bottom = self.args.height - margin
+        panel_h = bottom - top
+        panel_w = (self.args.width - 2 * margin - 2 * gap) // 3
+        modes = ["material", "intensity", "pseudo"]
+        for idx, mode in enumerate(modes):
+            x = margin + idx * (panel_w + gap)
+            width = panel_w if idx < 2 else self.args.width - margin - x
+            self._draw_camera_overlay_panel(pygame.Rect(x, top, width, panel_h), color_info, mode)
+
+        npts = 0 if self.last_lidar is None else int(self.last_lidar.shape[0])
+        status = f"LiDAR points: {npts:,}   |   Projected: {self.last_projection_stats['projected_points']:,} ({self.last_projection_stats['projection_ratio']:.1%})   |   P cycles view"
+        draw_text(self.screen, self.font_small, status, (margin + 16, bottom - 23), TEXT_MUTED)
+
     def manual_control(self):
         if self.vehicle is None or self.args.autopilot or self.trajectory_poses:
             return
@@ -2173,11 +2264,14 @@ class CarlaLidarViewer:
                     if event.key == pygame.K_ESCAPE:
                         return
                     if event.key == pygame.K_p:
+                        mode_sequence = list(DISPLAY_MODE_SEQUENCE)
+                        if CAMERA_TRIPLE_MODE not in mode_sequence:
+                            mode_sequence.append(CAMERA_TRIPLE_MODE)
                         try:
-                            idx = DISPLAY_MODE_SEQUENCE.index(self.color_mode)
+                            idx = mode_sequence.index(self.color_mode)
                         except ValueError:
                             idx = 0
-                        self.color_mode = DISPLAY_MODE_SEQUENCE[(idx + 1) % len(DISPLAY_MODE_SEQUENCE)]
+                        self.color_mode = mode_sequence[(idx + 1) % len(mode_sequence)]
                     if event.key == pygame.K_r:
                         self.request_respawn("keyboard_r")
 
@@ -2211,6 +2305,12 @@ class CarlaLidarViewer:
             self.screen.fill(BG_COLOR)
             layout = self.get_layout()
             current_color_info = self.last_color_info
+            if self.color_mode == CAMERA_TRIPLE_MODE:
+                self.draw_triple_camera_view(current_color_info)
+                pygame.display.flip()
+                self.clock.tick(self.args.fps)
+                continue
+
             frame_rect = layout["camera"]
             draw_card(self.screen, frame_rect)
             if self.rgb_array is not None:
@@ -2326,7 +2426,7 @@ def build_argparser():
     ap.add_argument("--seed", type=int, default=42,
                     help="Deterministic seed for parked vehicle blueprint selection")
     ap.add_argument("--weather", choices=["nominal", "rain", "snow", "fog"], default="nominal")
-    ap.add_argument("--mode", choices=["intensity", "pseudo", "material"], default="pseudo")
+    ap.add_argument("--mode", choices=["intensity", "pseudo", "material", CAMERA_TRIPLE_MODE], default="pseudo")
 
     ap.add_argument("--cam-fov", type=float, default=90.0)
 
