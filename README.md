@@ -1,4 +1,4 @@
-# MatSense Dashboard: Material- and Weather-Aware LiDAR Inspection in CARLA
+# MatSense Dashboard: Material and Weather-Aware LiDAR Inspection in CARLA
 
 [![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.34+-red.svg)](https://streamlit.io/)
@@ -28,6 +28,10 @@ docs/assets/trajectory_point_cloud.png
 ---
 
 ## Visual Overview
+
+**Pseudo-reflectance vista in CARLA**
+
+![RGB view with projected LiDAR returns overlaid on the scene, plus top-down pseudo-reflectance response computed using weather and material priors](docs/assets/pseudo2.png)
 
 **Trajectory-level LiDAR point cloud**
 
