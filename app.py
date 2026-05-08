@@ -651,6 +651,12 @@ def load_lidar_animation_frames(
             idx = rng.choice(idx, size=take_n, replace=False)
         frame_id = frame_id_from_npz(label_path) or -1
         materials = label["material_label"].astype(str)[idx] if "material_label" in label else np.array(["unknown"] * len(idx))
+        raw_intensity = raw["intensity"][idx].astype(float) if "intensity" in raw else np.zeros(len(idx))
+        if raw_intensity.size:
+            lo, hi = np.percentile(raw_intensity, [2, 98])
+            raw_display = np.clip((raw_intensity - lo) / max(hi - lo, 1e-6), 0.0, 1.0)
+        else:
+            raw_display = raw_intensity
         frames.append(
             pd.DataFrame(
                 {
@@ -658,7 +664,8 @@ def load_lidar_animation_frames(
                     "plot_y": xyz[idx, 0],
                     "material": materials,
                     "material_color": [MATERIAL_COLORS.get(str(m), MATERIAL_COLORS["unknown"]) for m in materials],
-                    "raw_intensity": raw["intensity"][idx].astype(float) if "intensity" in raw else np.zeros(len(idx)),
+                    "raw_intensity": raw_intensity,
+                    "raw_display": raw_display,
                     "pseudo_norm": label["pseudo_norm"][idx].astype(float) if "pseudo_norm" in label else np.zeros(len(idx)),
                     "frame_id": frame_id,
                 }
@@ -701,14 +708,15 @@ def lidar_animation_figure(frames: list[pd.DataFrame], scenario: str, point_size
                 marker=dict(
                     size=point_size,
                     opacity=point_opacity,
-                    color=frame_df["raw_intensity"],
+                    color=frame_df["raw_display"],
                     colorscale=[[0, "#000000"], [0.5, "#00DCFF"], [1, "#FFFFFF"]],
                     cmin=0,
                     cmax=1,
                     showscale=True,
                     colorbar=dict(title="", x=0.64, len=0.60, thickness=12),
                 ),
-                hovertemplate="raw=%{marker.color:.3f}<br>right=%{x:.2f}<br>forward=%{y:.2f}<extra></extra>",
+                customdata=frame_df["raw_intensity"],
+                hovertemplate="raw=%{customdata:.3f}<br>right=%{x:.2f}<br>forward=%{y:.2f}<extra></extra>",
                 showlegend=False,
             ),
             go.Scattergl(
@@ -1085,7 +1093,8 @@ def dataset_analyzer(toolkit_dir: Path | None, config: dict) -> None:
                 use_container_width=True,
             )
             st.caption(
-                "Use Play or the frame slider to inspect the same LiDAR scan across the three views."
+                "Use Play or the frame slider to inspect the same LiDAR scan across the three views. "
+                "CARLA raw intensity is contrast-stretched per frame for display; hover values remain raw."
             )
 
     with tab_response:
