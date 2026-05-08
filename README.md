@@ -29,7 +29,7 @@ Scenario building, ROS-bag extraction, map alignment, and trajectory snapping ar
 
 ****
 
-[RGB + LiDAR overlays preview](docs/assets/pygame_rgb_lidar_overlay_views.gif)
+![RGB + LiDAR overlays preview](docs/assets/pygame_rgb_lidar_overlay_views.gif)
 
 **Pseudo-reflectance vista in CARLA**
 
