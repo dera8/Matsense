@@ -1,294 +1,183 @@
-# MatSense Dashboard: Material and Weather-Aware LiDAR Inspection in CARLA
+# MatSense: Material- and Weather-Aware LiDAR Inspection in CARLA
 
-[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.34+-red.svg)](https://streamlit.io/)
-[![CARLA](https://img.shields.io/badge/CARLA-0.9.16-118AB2.svg)](https://carla.org/)
-[![License](https://img.shields.io/badge/License-TBD-lightgrey.svg)](#license)
+![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
+![Streamlit](https://img.shields.io/badge/Streamlit-1.34+-red.svg)
+![CARLA](https://img.shields.io/badge/CARLA-0.9.16-118AB2.svg)
+![License](https://img.shields.io/badge/License-TBD-lightgrey.svg)
 
-> Public artifact repository for the MatSense tool paper  
-> **"MatSense: Material- and Weather-Aware LiDAR Testing for Autonomous Driving Systems in CARLA"**  
-> Artifact DOI: **TBD**  
-> Screencast: **TBD**
+MatSense measures how a real LiDAR responds to different materials and transfers
+that response into CARLA, so the same scenario can be driven under the
+simulator's own sensing, under a scene-uniform degradation, and under the
+calibrated material-aware response.
 
----
+This repository holds **the tool**: the Streamlit dashboard, the CARLA/pygame
+runtime viewer, the material-aware LiDAR response, the dataset recorder, and a
+small demo dataset so the analyzer works without CARLA.
 
-## Overview
+It deliberately does **not** hold the experiment campaigns, their outputs, the
+analysis scripts or the figures. Those are distributed as a replication package,
+so a checkout stays small and there is one obvious thing to run.
 
-**MatSense** is a CARLA-based tool for material- and weather-aware LiDAR testing. This repository provides the public MatSense artifact, including the Streamlit dashboard, CARLA/pygame runtime viewer, material-aware LiDAR configuration, dataset analyzer, and a bundled demo dataset for immediate inspection.
+## What is calibrated, and what is not
 
-The repository is self-contained for artifact review:
+The per-material response is estimated from real recordings; the tool reports it
+as a measurement-configuration-independent intensity after Laasch et al. (2025),
+which is the product of the scanner constant and the reflectance. **It is not a
+reflectance**, it depends on the scanner, and a profile calibrated for one
+instrument does not transfer to another by rescaling.
 
-- it includes a small demo dataset under `sample_data/`, so the Dataset Analyzer works without CARLA;
-- it includes MatSense runtime components under `bundled_toolkit/`, so the Run Viewer tab can launch the pygame viewer when CARLA is available.
+Being precise about which numbers are measured matters more than the numbers
+themselves:
 
-Scenario building, ROS-bag extraction, map alignment, and trajectory snapping are intentionally outside this dashboard release. Those workflows remain part of the main MatSense toolkit and are planned for a later dashboard version.
+| | status |
+| --- | --- |
+| nominal response, per material | measured |
+| rain ratio, per material | measured for asphalt, building, car, vegetation |
+| rain ratio, sidewalk and fallback | carried over, **not measured** |
+| snow ratios | carried over, **not measured** |
 
----
+The profile files carry the same statement in their own `notes` field. Snow is
+offered because the simulator can render it, not because it has been calibrated
+against real snow recordings.
 
-## Visual Overview
-
-****
+## Visual overview
 
 ![RGB + LiDAR overlays preview](docs/assets/pygame_rgb_lidar_overlay_views.gif)
 
-**Pseudo-reflectance vista in CARLA**
-
 ![RGB view with projected LiDAR returns overlaid on the scene, plus top-down pseudo-reflectance response computed using weather and material priors](docs/assets/pseudo2.png)
 
-**Material response across weather scenarios**
+RGB view with projected LiDAR returns, and the top-down material-aware response.
 
 ![Material response across weather scenarios](docs/assets/material_response.png)
 
-**Single-frame CARLA intensity vs MatSense pseudo-reflectance**
+Material response across weather conditions.
 
 ![Single-frame LiDAR inspection](docs/assets/frame_inspector.png)
 
-**Point Cloud Trajectory**
+Single-frame CARLA intensity against the MatSense response.
 
 ![Aggregated LIDAR Point Cloud Trajectory](docs/assets/pointcloud_traj.png)
 
----
+Aggregated point cloud over a trajectory.
 
-## Main Features
+## Features
 
-- **Run Viewer**
-  - Launch the bundled MatSense CARLA/pygame viewer.
-  - Configure weather, view mode, trajectory, parked vehicles, autopilot, and dataset recording.
-  - Start and stop the viewer from the dashboard.
-  - Use a recorded trajectory when available, or CARLA autopilot when no trajectory is provided.
+**Run Viewer.** Launches the bundled CARLA/pygame viewer, and configures
+weather, view mode, trajectory, parked vehicles, autopilot and dataset
+recording. Drives a recorded trajectory when one is given, or CARLA autopilot
+when none is.
 
-- **Dataset Analyzer**
-  - Read MatSense datasets from `output_dataset/<scene_id>/<scenario>/`.
-  - Show an aggregated top-down point cloud over the trajectory.
-  - Inspect individual LiDAR frames.
-  - Compare pseudo-reflectance across material classes and weather scenarios.
-  - Compare default CARLA LiDAR intensity with MatSense pseudo-reflectance.
-  - Keep detailed coverage tables and diagnostic plots in Advanced Metrics.
+**Dataset Analyzer.** Reads a recorded dataset from
+`output_dataset/<scene_id>/<scenario>/`, shows the aggregated top-down cloud
+over the trajectory, inspects single frames, and compares the material-aware
+response against CARLA's own intensity per material class and per condition.
 
----
+## Repository layout
 
-## Repository Structure
-
-```text
+```
 matsense_streamlit_app
-|-- .streamlit/
-|   `-- config.toml
+|-- .streamlit/config.toml
 |-- bundled_toolkit/
-|   |-- configs/
-|   |-- scripts/
+|   |-- configs/          calibrated profiles and material overrides
+|   |-- scripts/          CARLA runtime: viewer, recorder, response model
 |   `-- src/material_aware_toolkit/
 |-- docs/
 |   |-- assets/
-|   `-- USER_GUIDE.md
-|-- sample_data/
-|   `-- scene_001/
-|       |-- nominal/
-|       |-- rain/
-|       `-- snow/
+|   |-- USER_GUIDE.md
+|   `-- DATASET_FORMAT.md what a recorded run contains and how to read it
+|-- sample_data/scene_001/{nominal,rain,snow}
 |-- app.py
 |-- CITATION.cff
-|-- README.md
 `-- requirements.txt
 ```
 
-`bundled_toolkit/` contains the runtime components used by MatSense to launch the CARLA/pygame viewer and apply material-aware LiDAR response models. Generated outputs, caches, and experimental scenario-preparation utilities are not included in this public artifact release.
-
-For step-by-step usage instructions, see:
-
-```text
-docs/USER_GUIDE.md
-```
-
----
-
 ## Installation
 
-Clone the repository and install the Python dependencies:
-
-```powershell
-git clone https://github.com/<your-username>/matsense-streamlit-dashboard.git
-cd matsense-streamlit-dashboard
-pip install -r requirements.txt
-```
-
-Requirements:
-
-- Python 3.10+
-- Streamlit
-- pandas
-- NumPy
-- Plotly
-- pygame
-- optional for Run Viewer: CARLA running locally and a Python environment where `import carla` works
-
-The Dataset Analyzer does not require CARLA.
-
-### Ubuntu/Linux Notes
-
-The Streamlit dashboard and Dataset Analyzer run on Ubuntu/Linux.
-
-Typical setup:
-
 ```bash
-cd matsense-streamlit-dashboard
+git clone https://github.com/dera8/Matsense.git
+cd Matsense
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-streamlit run app.py
 ```
 
-The Run Viewer also works on Ubuntu/Linux when:
+Requirements: Python 3.10+, Streamlit, pandas, NumPy, Plotly, pygame. The Run
+Viewer additionally needs CARLA running locally and a Python environment where
+`import carla` works. **The Dataset Analyzer needs neither.**
 
-- CARLA is installed and running;
-- the CARLA Python API is available in the active environment;
-- a graphical desktop session is available through X11 or Wayland;
-- `pygame` can open a display.
-
-The **Browse** buttons use Python `tkinter`. On Ubuntu, install it if the file dialog does not open:
-
-```bash
-sudo apt install python3-tk
-```
-
-If the app is running in a headless environment or `tkinter` is unavailable, paste file and folder paths manually into the text fields.
-
----
+The Browse buttons use `tkinter`. On Ubuntu install it with
+`sudo apt install python3-tk` if the file dialog does not open; in a headless
+environment, paste paths into the text fields instead.
 
 ## Usage
 
-Start the dashboard:
-
-```powershell
+```bash
 streamlit run app.py
 ```
 
-Then open the URL printed by Streamlit, usually:
-
-```text
-http://localhost:8501
-```
+Then open the URL Streamlit prints, usually `http://localhost:8501`.
 
 ### Run Viewer
 
-Use this tab to launch the bundled MatSense runtime viewer.
-
-This tab requires:
-
-- the bundled toolkit path, already filled in by default;
-- CARLA running with the desired map;
-- the CARLA Python API available in the active Python environment.
-
+Needs CARLA running with the desired map and the CARLA Python API importable.
 Typical settings:
 
-```text
-Weather         = nominal / rain / snow / fog
-View            = material / pseudo / intensity
+```
+Weather         = nominal | rain | snow
+View            = material | pseudo | intensity
 Pseudo scale    = fixed
 Trajectory TXT  = optional recorded UTM trajectory
 Trajectory JSON = optional CARLA-local trajectory
 Parked JSON     = optional parked-vehicle layout
-Autopilot       = enabled when no trajectory is available
-Save dataset    = enabled when recording outputs
+Autopilot       = used when no trajectory is given
+Save dataset    = records frames, clouds and labels
 ```
 
-If you want to use a full MatSense toolkit checkout instead of the bundled runtime, set the path in the sidebar or define:
-
-```powershell
-$env:MATSENSE_TOOLKIT="C:\path\to\material_aware_carla_toolkit"
-streamlit run app.py
-```
+To use a full toolkit checkout instead of the bundled runtime, set the path in
+the sidebar or export `MATSENSE_TOOLKIT`.
 
 ### Dataset Analyzer
 
-Use this tab after recording one or more MatSense scenarios.
+The demo dataset under `sample_data/scene_001` loads by default and contains a
+small nominal, rain and snow subset. A recorded dataset has this layout:
 
-The bundled demo dataset is loaded by default:
-
-```text
-sample_data/scene_001
+```
+output_dataset/scene_001/nominal/
+  frame_metadata.csv     per-frame pose, weather and coverage
+  scenario_metadata.json map, spawn, trajectory and sensor settings
+  calibration.json       intrinsics and the camera-from-LiDAR transform
+  actors.csv             pose, velocity and box of surrounding actors
+  lidar_raw/frame_XXXXXX.npz     xyz and CARLA's own intensity
+  lidar_labels/frame_XXXXXX.npz  material, instance id, range, MatSense intensity
 ```
 
-It contains a small nominal/rain/snow subset with frame metadata, raw CARLA LiDAR intensity, and MatSense material-aware labels.
+`lidar_raw/intensity` and `lidar_labels/pseudo_final` are the same returns
+before and after the transformation. That pairing is the point of the recording
+and the one thing a plain CARLA capture does not give you.
+`docs/DATASET_FORMAT.md` documents the rest.
 
-Expected dataset layout:
+The analyzer reports frames per scenario, route duration and distance, points
+per frame, projection and known-material ratios, and the response per material
+against CARLA's intensity.
 
-```text
-output_dataset/
-`-- scene_001/
-    |-- nominal/
-    |   |-- frame_metadata.csv
-    |   |-- scenario_metadata.json
-    |   |-- lidar_raw/
-    |   |   `-- frame_XXXXXX.npz
-    |   `-- lidar_labels/
-    |       `-- frame_XXXXXX.npz
-    |-- rain/
-    `-- snow/
-```
+## Not in this repository
 
-The analyzer reads:
-
-- `frame_metadata.csv` for frame-level coverage statistics;
-- `lidar_raw/*.npz` for default CARLA LiDAR intensity;
-- `lidar_labels/*.npz` for material labels and MatSense pseudo-reflectance.
-
----
-
-## Dataset Metrics
-
-The dashboard reports:
-
-- number of frames per scenario;
-- route duration and distance;
-- mean LiDAR points per frame;
-- mean projected LiDAR points;
-- projection ratio;
-- known-material ratio;
-- pseudo-reflectance mean and standard deviation by material;
-- default CARLA intensity mean and standard deviation by material;
-- MatSense-vs-CARLA normalized response difference;
-- pseudo-reflectance delta and ratio against a baseline scenario.
-
-These metrics support artifact inspection and paper figures.
-
----
-
-## Scope
-
-Included in this repository:
-
-- Streamlit dashboard;
-- bundled demo dataset;
-- dataset analyzer;
-- CARLA/pygame runtime viewer components;
-- blue-themed interface matching the MatSense desktop launcher.
-
-Not included in this dashboard release:
-
-- ROS bag extraction;
-- trajectory conversion from UTM to CARLA/OpenDRIVE coordinates;
-- road snapping;
-- parked-vehicle alignment;
-- scenario generation.
-
----
+Campaign runners, calibration and analysis scripts, scenario definitions, agent
+patches and figure generators. They are part of the replication package rather
+than of the tool.
 
 ## Citation
 
-If you use MatSense or this dashboard in your research, please cite the associated tool paper.
-
 ```bibtex
-@inproceedings{matsense2026,
-  title     = {MatSense: Material- and Weather-Aware LiDAR Testing for Autonomous Driving Systems in CARLA},
-  author    = {Russo, Debora and others},
-  booktitle = {TBD},
-  year      = {2026},
-  doi       = {TBD}
+@article{matsense2026,
+  title  = {Material-Aware LiDAR Sensing for Simulation-Based Testing of Autonomous Driving Systems},
+  author = {Russo, Debora and others},
+  year   = {2026},
+  doi    = {TBD}
 }
 ```
 
----
-
 ## License
 
-License information is currently **TBD**. Add a `LICENSE` file before making the repository public.
+Not yet chosen. Add a `LICENSE` file before relying on this repository being
+reusable: without one, the default is that no permission is granted.

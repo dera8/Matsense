@@ -40,7 +40,7 @@
     "use_base_nominal": false,
     "display_mode_sequence": [
       "intensity",
-      "pseudo",
+      "global",
       "material"
     ],
     "strict_sync": false,
@@ -66,8 +66,6 @@
         "car": 1.0,
         "sidewalk": 1.0,
         "vegetation": 1.0,
-        "wood": 1.0,
-        "metal": 1.0,
         "unknown": 1.0
       },
       "rain": {
@@ -76,8 +74,6 @@
         "car": 0.432,
         "sidewalk": 0.069,
         "vegetation": 0.89,
-        "wood": 0.58,
-        "metal": 0.66,
         "unknown": 0.5
       },
       "snow": {
@@ -86,18 +82,6 @@
         "car": 1.538,
         "sidewalk": 0.082,
         "vegetation": 0.652,
-        "wood": 0.84,
-        "metal": 1.18,
-        "unknown": 0.7
-      },
-      "fog": {
-        "asphalt": 0.7,
-        "building": 0.7,
-        "car": 0.7,
-        "sidewalk": 0.7,
-        "vegetation": 0.7,
-        "wood": 0.7,
-        "metal": 0.7,
         "unknown": 0.7
       }
     },
@@ -107,8 +91,6 @@
       "vegetation": 0.7,
       "car": 0.9,
       "building": 0.55,
-      "wood": 0.45,
-      "metal": 0.78,
       "unknown": 0.4
     }
   }
