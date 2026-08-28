@@ -73,7 +73,6 @@ SCENARIO_COLORS = {
     "nominal": "#118AB2",
     "rain": "#5BC0DE",
     "snow": "#9DD9D2",
-    "fog": "#073B4C",
 }
 MATERIAL_COLORS = {
     "asphalt": "#4A4A4A",
@@ -81,7 +80,6 @@ MATERIAL_COLORS = {
     "building": "#FF8811",
     "vegetation": "#06D6A0",
     "car": "#EF476F",
-    "metal": "#118AB2",
     "unknown": "#B0B7C3",
 }
 
@@ -1329,7 +1327,13 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
         fps = c3.number_input("FPS", value=int(config.get("fps", 20)), step=1)
 
         c1, c2, c3 = st.columns(3)
-        weather = c1.selectbox("Weather", ["nominal", "rain", "snow", "fog"], index=["nominal", "rain", "snow", "fog"].index(config.get("weather", "nominal")) if config.get("weather") in ["nominal", "rain", "snow", "fog"] else 0)
+        weather_options = ["nominal", "rain", "snow"]
+        weather_default = str(config.get("weather", "nominal"))
+        weather = c1.selectbox(
+            "Weather",
+            weather_options,
+            index=weather_options.index(weather_default) if weather_default in weather_options else 0,
+        )
         view_options = {
             "camera_triple": "RGB overlays: all 3",
             "material": "Material classes",

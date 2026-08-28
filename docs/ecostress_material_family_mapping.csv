@@ -1,0 +1,7 @@
+material,ecostress_family_primary,ecostress_family_alternates,confidence,notes
+asphalt,asphalt,"road asphalt; bitumen-rich road surfaces",high,"Strongest mapping; closest to road-class semantic meaning."
+building,concrete,"brick; plaster; stucco; painted facade",medium,"Building is facade-dependent and should not be treated as a single homogeneous spectrum."
+vegetation,green vegetation,"broadleaf leaf; grass; shrub foliage",high,"Use healthy vegetation spectra first; note moisture and structure sensitivity."
+car,automotive paint,"painted metal; coated polymer; windshield glass",low,"Car is optically heterogeneous; treat as a mixture prior, not a single clean material."
+sidewalk,concrete,"cement pavement; light masonry paving",medium,"Sidewalk was not a core calibration class but can share the concrete family."
+unknown,mixed urban composite,"fallback prior only",low,"Use only as a fallback; do not interpret physically."

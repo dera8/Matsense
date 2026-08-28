@@ -1,0 +1,6 @@
+material,wavelength_um,ecostress_family_primary,selected_spectrum_ids,prior_reflectance_905nm,prior_reflectance_low,prior_reflectance_high,selection_notes
+asphalt,0.905,asphalt,,,,"","Fill from 1-3 representative asphalt spectra."
+building,0.905,concrete,,,,"","Prefer a small family summary rather than a single facade spectrum."
+vegetation,0.905,green vegetation,,,,"","Use representative foliage spectra near the LiDAR wavelength."
+car,0.905,automotive paint,,,,"","Likely needs a mixture assumption; note whether glass is excluded."
+sidewalk,0.905,concrete,,,,"","Optional; mostly useful for completeness."

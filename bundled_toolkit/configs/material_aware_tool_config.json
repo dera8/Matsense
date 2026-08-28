@@ -1,11 +1,11 @@
 {
-  "default_profile": "carla_default",
+  "default_profile": "realbag_empirical_v1",
   "profiles": {
     "carla_default": {
       "default_material": "unknown",
       "display_mode_sequence": [
         "intensity",
-        "pseudo",
+        "global",
         "material"
       ],
       "semantic_to_material": {
@@ -22,15 +22,41 @@
         "24": "asphalt"
       },
       "display_colors": {
-        "asphalt": [255, 255, 255],
-        "concrete": [255, 221, 0],
-        "sidewalk": [255, 221, 0],
-        "building": [255, 128, 0],
-        "vegetation": [0, 255, 80],
-        "car": [255, 0, 160],
-        "wood": [160, 80, 20],
-        "metal": [0, 220, 255],
-        "unknown": [80, 80, 80]
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
       },
       "nominal_base": {
         "asphalt": 0.2,
@@ -38,8 +64,6 @@
         "vegetation": 0.7,
         "car": 0.9,
         "building": 0.55,
-        "wood": 0.45,
-        "metal": 0.78,
         "unknown": 0.4
       },
       "weather_ratio": {
@@ -49,8 +73,6 @@
           "car": 1.0,
           "sidewalk": 1.0,
           "vegetation": 1.0,
-          "wood": 1.0,
-          "metal": 1.0,
           "unknown": 1.0
         },
         "rain": {
@@ -59,8 +81,6 @@
           "car": 0.432,
           "sidewalk": 0.069,
           "vegetation": 0.89,
-          "wood": 0.58,
-          "metal": 0.66,
           "unknown": 0.5
         },
         "snow": {
@@ -69,28 +89,406 @@
           "car": 1.538,
           "sidewalk": 0.082,
           "vegetation": 0.652,
-          "wood": 0.84,
-          "metal": 1.18,
-          "unknown": 0.7
-        },
-        "fog": {
-          "asphalt": 0.7,
-          "building": 0.7,
-          "car": 0.7,
-          "sidewalk": 0.7,
-          "vegetation": 0.7,
-          "wood": 0.7,
-          "metal": 0.7,
           "unknown": 0.7
         }
       },
       "planar_materials": [
         "asphalt",
         "building",
-        "sidewalk",
-        "wood",
-        "metal"
+        "sidewalk"
       ]
+    },
+    "realbag_empirical_v1": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 0.272,
+        "sidewalk": 0.3,
+        "vegetation": 0.645,
+        "car": 1.0,
+        "building": 0.981,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 0.96,
+          "building": 0.665,
+          "car": 0.65,
+          "sidewalk": 0.96,
+          "vegetation": 0.586,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 0.493,
+          "building": 0.28,
+          "car": 1.538,
+          "sidewalk": 0.082,
+          "vegetation": 0.652,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Empirical v1 profile grounded on same-road nominal and rain real-bag pseudo-reflectance priors. Asphalt is the strongest anchor; building is facade-dependent; car and vegetation remain lower-confidence classes."
+    },
+    "realbag_empirical_v2": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 0.497,
+        "sidewalk": 0.3,
+        "vegetation": 0.6091,
+        "car": 0.5977,
+        "building": 1.0,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 1.0258,
+          "building": 1.0024,
+          "car": 0.9553,
+          "sidewalk": 0.96,
+          "vegetation": 0.9231,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 0.493,
+          "building": 0.28,
+          "car": 1.538,
+          "sidewalk": 0.082,
+          "vegetation": 0.652,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Rebuilt from pseudoreflectance_v3c (anchor range model fitted on [2,60] m, v3 hierarchical SAM3 masks). Seven measured classes aggregated to the four runtime materials by point count. sidewalk, unknown and the snow ratios are carried over from realbag_empirical_v1 and are not measured. Weather ratios normalised at R0=40 m; they are strongly sensitive to this choice (see notes) while nominal_base is not."
+    },
+    "realbag_empirical_v2_r10": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 0.4909,
+        "sidewalk": 0.3,
+        "vegetation": 0.6091,
+        "car": 0.5976,
+        "building": 1.0,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 1.0577,
+          "building": 0.7456,
+          "car": 0.7463,
+          "sidewalk": 0.96,
+          "vegetation": 0.7209,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 0.493,
+          "building": 0.28,
+          "car": 1.538,
+          "sidewalk": 0.082,
+          "vegetation": 0.652,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Rebuilt from pseudoreflectance_v3c (anchor range model fitted on [2,60] m, v3 hierarchical SAM3 masks). Seven measured classes aggregated to the four runtime materials by point count. sidewalk, unknown and the snow ratios are carried over from realbag_empirical_v1 and are not measured. Weather ratios normalised at R0=10 m; they are strongly sensitive to this choice (see notes) while nominal_base is not."
+    },
+    "realbag_empirical_v3": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 0.5472,
+        "sidewalk": 0.3,
+        "vegetation": 0.8329,
+        "car": 0.7113,
+        "building": 1.0,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 0.8876,
+          "building": 0.9774,
+          "car": 0.9179,
+          "sidewalk": 0.96,
+          "vegetation": 0.972,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 0.493,
+          "building": 0.28,
+          "car": 1.538,
+          "sidewalk": 0.082,
+          "vegetation": 0.652,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Built by tools/calibrate_mci.py from pseudoreflectance_v3c. I_MCI = kappa*rho after Laasch et al. 2025 - not a reflectance. g(R) is SHARED across bags (a sensor property, so g(R0) cancels from every cross-bag ratio and alpha is R0-independent by construction), estimated on equal-population bins with bin means and an isotonic fit. Band 20-60 m: below 20 the asphalt anchor is quantised onto 0 and 1, beyond 60 87-97% of points of every class read exactly 63. sidewalk, unknown and the snow ratios are carried over and not measured."
     }
   },
   "launch_presets": {
@@ -117,6 +515,6 @@
       "display_percentile": "95",
       "scenario_name": "snow",
       "use_base_nominal": false
-      }
     }
   }
+}
