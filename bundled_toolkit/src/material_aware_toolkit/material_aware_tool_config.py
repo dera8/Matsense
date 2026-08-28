@@ -15,7 +15,7 @@ DEFAULT_TOOL_CONFIG = {
     "profiles": {
         "carla_default": {
             "default_material": "unknown",
-            "display_mode_sequence": ["intensity", "pseudo", "material"],
+            "display_mode_sequence": ["intensity", "global", "material"],
             "semantic_to_material": {
                 "1": "asphalt",
                 "2": "sidewalk",
@@ -36,8 +36,6 @@ DEFAULT_TOOL_CONFIG = {
                 "building": [230, 130, 40],
                 "vegetation": [60, 190, 70],
                 "car": [240, 70, 120],
-                "wood": [166, 108, 64],
-                "metal": [120, 200, 220],
                 "unknown": [70, 110, 210],
             },
             "nominal_base": {
@@ -46,8 +44,6 @@ DEFAULT_TOOL_CONFIG = {
                 "vegetation": 0.70,
                 "car": 0.90,
                 "building": 0.55,
-                "wood": 0.45,
-                "metal": 0.78,
                 "unknown": 0.40,
             },
             "weather_ratio": {
@@ -57,8 +53,6 @@ DEFAULT_TOOL_CONFIG = {
                     "car": 1.0,
                     "sidewalk": 1.0,
                     "vegetation": 1.0,
-                    "wood": 1.0,
-                    "metal": 1.0,
                     "unknown": 1.0,
                 },
                 "rain": {
@@ -67,8 +61,6 @@ DEFAULT_TOOL_CONFIG = {
                     "car": 0.432,
                     "sidewalk": 0.069,
                     "vegetation": 0.890,
-                    "wood": 0.58,
-                    "metal": 0.66,
                     "unknown": 0.5,
                 },
                 "snow": {
@@ -77,22 +69,10 @@ DEFAULT_TOOL_CONFIG = {
                     "car": 1.538,
                     "sidewalk": 0.082,
                     "vegetation": 0.652,
-                    "wood": 0.84,
-                    "metal": 1.18,
                     "unknown": 0.7,
                 },
-                "fog": {
-                    "asphalt": 0.70,
-                    "building": 0.70,
-                    "car": 0.70,
-                    "sidewalk": 0.70,
-                    "vegetation": 0.70,
-                    "wood": 0.70,
-                    "metal": 0.70,
-                    "unknown": 0.70,
-                },
             },
-            "planar_materials": ["asphalt", "building", "sidewalk", "wood", "metal"],
+            "planar_materials": ["asphalt", "building", "sidewalk"],
         }
     },
     "launch_presets": {
