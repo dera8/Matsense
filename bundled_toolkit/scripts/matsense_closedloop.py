@@ -62,6 +62,8 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import NamedTuple
 
+from dataclasses import dataclass
+
 import numpy as np
 
 # ---------------------------------------------------------------------------
@@ -87,6 +89,7 @@ from material_aware_toolkit.material_aware_tool_config import (
 # ---------------------------------------------------------------------------
 _cfg, _cfg_path = load_tool_config(_DEFAULT_CONFIG_PATH)
 _profile_name, _profile = get_profile(_cfg)
+_ACTIVE: 'Profile'
 _profile = normalize_profile(_profile)
 
 NOMINAL_BASE: dict[str, float] = dict(_profile["nominal_base"])
@@ -192,6 +195,104 @@ def _match_semantic_tags(
 _MAX_TAG = 256
 
 
+@dataclass(frozen=True)
+class Profile:
+    """Every table the operator needs, as one value that can be passed around.
+
+    The operator used to read eleven module-level globals that apply_profile()
+    rewrote. That made its output depend on state set earlier by somebody else,
+    and it is how a campaign came to run on realbag_empirical_v1 while every
+    filename said v3. Bundled into one frozen value, the profile travels with
+    the call instead: two adapters can hold different profiles in one process,
+    and there is no default left to forget.
+
+    The module still keeps one instance as the active profile so that the
+    existing callers work unchanged; build_profile() is pure and touches
+    nothing global.
+    """
+    name: str
+    nominal_base: dict
+    weather_ratio: dict
+    semantic_to_material: dict
+    planar_materials: frozenset
+    default_material: str
+    measured_materials: frozenset
+    materials: tuple
+    mat_index: dict
+    mat_array: np.ndarray
+    default_code: int
+    tag_to_code: np.ndarray
+    tag_mapped: np.ndarray
+    base_by_code: np.ndarray
+    ratio_by_code: dict
+    max_by_weather: dict
+    supported_by_code: np.ndarray
+
+
+def build_profile(cfg: dict, name: str | None = None) -> Profile:
+    """A Profile from a configuration dictionary. Pure: no globals touched.
+
+    The arithmetic below is the arithmetic _rebuild_tables() used to do in
+    place; it was moved rather than rewritten, so an operator driven by the
+    returned value produces the same bytes as one driven by the globals.
+    """
+    pname, raw = get_profile(cfg, name)
+    prof = normalize_profile(raw)
+    nominal_base = dict(prof["nominal_base"])
+    weather_ratio = dict(prof["weather_ratio"])
+    sem = dict(prof["semantic_to_material"])
+    default_material = prof["default_material"]
+    measured = set(prof.get("measured_materials") or nominal_base)
+
+    materials = sorted(set(sem.values()) | set(nominal_base) | {default_material})
+    mat_index = {m: i for i, m in enumerate(materials)}
+    default_code = mat_index[default_material]
+
+    # CARLA class ids are small; the table is indexed directly by tag. Anything
+    # outside it, including the 0 that means "no partner found", maps to the
+    # default material.
+    tag_to_code = np.full(_MAX_TAG, default_code, dtype=np.int32)
+    tag_mapped = np.zeros(_MAX_TAG, dtype=bool)
+    for t, m in sem.items():
+        if 0 <= int(t) < _MAX_TAG:
+            tag_to_code[int(t)] = mat_index.get(str(m), default_code)
+            tag_mapped[int(t)] = True
+
+    # float64, deliberately: the code these replace multiplied two Python floats
+    # and rounded the product to float32 once. Keeping the tables in float64 and
+    # casting after the multiply reproduces that rounding exactly; float32
+    # tables would round the operands first and can differ in the last bit,
+    # which is enough to change a dropout draw and with it the experiment.
+    base_by_code = np.array(
+        [nominal_base.get(m, nominal_base[default_material]) for m in materials],
+        dtype=np.float64)
+    ratio_by_code = {
+        w: np.array([lut.get(m, lut.get(default_material, 1.0)) for m in materials],
+                    dtype=np.float64)
+        for w, lut in weather_ratio.items()}
+    supported = np.array([m in measured for m in materials], dtype=bool)
+    # over the SUPPORTED classes only: scaling by the largest coefficient in the
+    # table would let a carried-over value set the scale for the measured ones
+    sup = supported if supported.any() else np.ones(len(materials), dtype=bool)
+    max_by_weather = {w: float(np.max((base_by_code * tab)[sup]))
+                      for w, tab in ratio_by_code.items()}
+
+    return Profile(
+        name=pname, nominal_base=nominal_base, weather_ratio=weather_ratio,
+        semantic_to_material=sem, planar_materials=frozenset(prof["planar_materials"]),
+        default_material=default_material, measured_materials=frozenset(measured),
+        materials=tuple(materials), mat_index=mat_index,
+        mat_array=np.array(materials, dtype=object), default_code=default_code,
+        tag_to_code=tag_to_code, tag_mapped=tag_mapped, base_by_code=base_by_code,
+        ratio_by_code=ratio_by_code, max_by_weather=max_by_weather,
+        supported_by_code=supported)
+
+
+def active() -> Profile:
+    """The profile the module-level operator is currently applying."""
+    return _ACTIVE
+
+
 def _rebuild_tables() -> None:
     """Derive every lookup array from the profile dictionaries above.
 
@@ -206,50 +307,22 @@ def _rebuild_tables() -> None:
     """
     global _MATERIALS, _MAT_INDEX, _MAT_ARRAY, _DEFAULT_CODE
     global _TAG_TO_CODE, _TAG_MAPPED, _BASE_BY_CODE, _RATIO_BY_CODE, _MAX_BY_WEATHER
-    global _SUPPORTED_BY_CODE
+    global _SUPPORTED_BY_CODE, _ACTIVE
 
-    _MATERIALS = sorted(
-        set(SEMANTIC_TO_MATERIAL.values()) | set(NOMINAL_BASE) | {DEFAULT_MATERIAL}
-    )
-    _MAT_INDEX = {m: i for i, m in enumerate(_MATERIALS)}
-    _MAT_ARRAY = np.array(_MATERIALS, dtype=object)
-    _DEFAULT_CODE = _MAT_INDEX[DEFAULT_MATERIAL]
-
-    # CARLA class ids are small; the table is indexed directly by tag. Anything
-    # outside it, including the 0 that means "no partner found", maps to the
-    # default material, which is what the dict .get(..., DEFAULT_MATERIAL) did.
-    _TAG_TO_CODE = np.full(_MAX_TAG, _DEFAULT_CODE, dtype=np.int32)
-    _TAG_MAPPED = np.zeros(_MAX_TAG, dtype=bool)
-    for t, m in SEMANTIC_TO_MATERIAL.items():
-        if 0 <= int(t) < _MAX_TAG:
-            _TAG_TO_CODE[int(t)] = _MAT_INDEX.get(str(m), _DEFAULT_CODE)
-            _TAG_MAPPED[int(t)] = True
-
-    # float64, deliberately: the code these replace multiplied two Python floats
-    # and rounded the product to float32 once. Keeping the tables in float64 and
-    # casting after the multiply reproduces that rounding exactly; float32 tables
-    # would round the operands first and can differ in the last bit, which is
-    # enough to change a dropout draw and with it the experiment.
-    _BASE_BY_CODE = np.array(
-        [NOMINAL_BASE.get(m, NOMINAL_BASE[DEFAULT_MATERIAL]) for m in _MATERIALS],
-        dtype=np.float64,
-    )
-    _RATIO_BY_CODE = {
-        w: np.array([lut.get(m, lut.get(DEFAULT_MATERIAL, 1.0)) for m in _MATERIALS],
-                    dtype=np.float64)
-        for w, lut in WEATHER_RATIO.items()
-    }
-    _SUPPORTED_BY_CODE = np.array([m in MEASURED_MATERIALS for m in _MATERIALS],
-                                  dtype=bool)
-    # the headroom mapping's fixed constant depends on the coefficients, so it
-    # has to be rebuilt with them
-    # over the SUPPORTED classes only: scaling by the largest coefficient in
-    # the table would let a carried-over value set the scale for the measured
-    # ones, which is the tail wagging the dog
-    _sup = _SUPPORTED_BY_CODE if _SUPPORTED_BY_CODE.any() else np.ones(
-        len(_MATERIALS), dtype=bool)
-    _MAX_BY_WEATHER = {w: float(np.max((_BASE_BY_CODE * tab)[_sup]))
-                       for w, tab in _RATIO_BY_CODE.items()}
+    # The arithmetic lives in build_profile() now. This keeps the old globals
+    # pointing at the same arrays so every existing caller is unaffected, and
+    # there is one implementation rather than two that can drift apart.
+    _ACTIVE = build_profile(_cfg, _profile_name)
+    _MATERIALS = list(_ACTIVE.materials)
+    _MAT_INDEX = _ACTIVE.mat_index
+    _MAT_ARRAY = _ACTIVE.mat_array
+    _DEFAULT_CODE = _ACTIVE.default_code
+    _TAG_TO_CODE = _ACTIVE.tag_to_code
+    _TAG_MAPPED = _ACTIVE.tag_mapped
+    _BASE_BY_CODE = _ACTIVE.base_by_code
+    _RATIO_BY_CODE = _ACTIVE.ratio_by_code
+    _MAX_BY_WEATHER = _ACTIVE.max_by_weather
+    _SUPPORTED_BY_CODE = _ACTIVE.supported_by_code
 
 
 def active_profile() -> str:

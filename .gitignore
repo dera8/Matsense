@@ -80,3 +80,6 @@ xdg-user-dir
 # the tool that wrote it.
 output_analysis/*.npz
 output_analysis/*.gif
+
+# --- app demo capture ---------------------------------------------------------
+.demo_frames/
