@@ -24,6 +24,7 @@ APP_DIR = Path(__file__).resolve().parent
 BUNDLED_TOOLKIT = APP_DIR / "bundled_toolkit"
 DEFAULT_TOOLKIT_TEXT = os.environ.get("MATSENSE_TOOLKIT", str(BUNDLED_TOOLKIT) if BUNDLED_TOOLKIT.exists() else "")
 SAMPLE_DATASET_ROOT = APP_DIR / "sample_data"
+OUTPUT_ANALYSIS = APP_DIR / "output_analysis"
 PID_FILE = Path(__file__).with_name(".matsense_viewer.pid")
 VIEWER_STDOUT = APP_DIR / "viewer_stdout.log"
 VIEWER_STDERR = APP_DIR / "viewer_stderr.log"
@@ -1459,13 +1460,145 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
         st.info(stop_viewer())
 
 
+def _artefact_rows() -> pd.DataFrame:
+    """An inventory of everything under output_analysis/.
+
+    Artefacts written through matsense_eval.artefact carry the tool that
+    produced them, the repository revision and a digest of their inputs. Older
+    ones do not, and the table says so rather than papering over it: a result
+    whose producing code is unknown deserves suspicion, not equal billing.
+    """
+    rows = []
+    for f in sorted(OUTPUT_ANALYSIS.glob("*.json")):
+        try:
+            d = json.loads(f.read_text())
+        except Exception:                                   # noqa: BLE001
+            rows.append({"artefact": f.name, "tool": "(unreadable)",
+                         "revision": "", "written": "", "provenance": False})
+            continue
+        prov = d.get("_provenance") if isinstance(d, dict) else None
+        rows.append({
+            "artefact": f.name,
+            "tool": (prov or {}).get("tool", ""),
+            "revision": (prov or {}).get("git", ""),
+            "written": (prov or {}).get(
+                "written", time.strftime("%Y-%m-%d %H:%M:%S",
+                                         time.localtime(f.stat().st_mtime))),
+            "provenance": bool(prov),
+        })
+    return pd.DataFrame(rows).sort_values("written", ascending=False)
+
+
+def _render_value(name: str, value) -> None:
+    """Render one piece of an artefact without per-artefact code.
+
+    Thirty-five tools write these files and their shapes differ. A viewer
+    written for each would have to be rewritten with every new experiment, so
+    this recognises the recurring shapes instead: a dict of dicts is a table,
+    a list of equal-length lists is a matrix, a flat dict is a two-column
+    table, and anything scalar is printed as text.
+
+    That last case is why this function exists in its current form. The first
+    version sent everything to st.json, which cannot take a bare string or
+    number and reported a JSON parse error on every path, count and float in
+    the file.
+    """
+    if value is None:
+        st.caption("null")
+        return
+    if isinstance(value, (str, int, float, bool)):
+        st.write(value)
+        return
+    if isinstance(value, dict) and value and all(
+            isinstance(v, dict) for v in value.values()):
+        st.dataframe(pd.DataFrame(value).T, use_container_width=True)
+        return
+    if isinstance(value, list) and value and all(
+            isinstance(v, list) for v in value) and len({len(v) for v in value}) == 1:
+        st.dataframe(pd.DataFrame(value), use_container_width=True)
+        return
+    if isinstance(value, list) and all(
+            isinstance(v, (str, int, float, bool, type(None))) for v in value):
+        st.write(", ".join("null" if v is None else str(v) for v in value))
+        return
+    if isinstance(value, dict) and value and all(
+            isinstance(v, (str, int, float, bool, type(None))) for v in value.values()):
+        st.dataframe(pd.DataFrame({"key": list(value), "value": list(value.values())}),
+                     use_container_width=True, hide_index=True)
+        return
+    st.json(value)
+
+
+def evidence_browser() -> None:
+    st.header("Evidence")
+    st.caption(
+        "Every experiment writes an artefact into output_analysis/. "
+        "This is where you read them without opening the JSON by hand."
+    )
+    if not OUTPUT_ANALYSIS.exists():
+        st.info(f"No {OUTPUT_ANALYSIS} directory.")
+        return
+
+    df = _artefact_rows()
+    if df.empty:
+        st.info("No artefacts yet.")
+        return
+
+    n_prov = int(df["provenance"].sum())
+    c1, c2, c3 = st.columns(3)
+    c1.metric("artefacts", len(df))
+    c2.metric("with provenance", n_prov)
+    c3.metric("without", len(df) - n_prov)
+    if n_prov < len(df):
+        st.warning(
+            f"{len(df) - n_prov} artefacts do not record which code produced "
+            "them: they were written before the tools started going through "
+            "matsense_eval.artefact. Re-running the tool updates them."
+        )
+
+    q = st.text_input("Filter by name or tool", "", key="ev_q").strip().lower()
+    view = df[df.apply(lambda r: q in r["artefact"].lower()
+                       or q in str(r["tool"]).lower(), axis=1)] if q else df
+    st.dataframe(view, use_container_width=True, hide_index=True)
+
+    choice = st.selectbox("Open an artefact", view["artefact"].tolist(),
+                          key="ev_pick")
+    if not choice:
+        return
+    data = json.loads((OUTPUT_ANALYSIS / choice).read_text())
+    prov = data.pop("_provenance", None) if isinstance(data, dict) else None
+    if prov:
+        st.caption(
+            f"produced by **{prov.get('tool', '?')}** at revision "
+            f"`{prov.get('git', '?')}` on {prov.get('written', '?')}"
+        )
+        if prov.get("inputs"):
+            with st.expander("Inputs and their digest"):
+                st.dataframe(pd.DataFrame(
+                    [{"input": k, "digest": v} for k, v in prov["inputs"].items()]),
+                    use_container_width=True, hide_index=True)
+    else:
+        st.caption("No provenance: the version of the code that produced this "
+                   "is unknown.")
+
+    if isinstance(data, dict):
+        for key, value in data.items():
+            st.subheader(key)
+            _render_value(key, value)
+    else:
+        st.json(data)
+
+
 def main() -> None:
     toolkit_dir, config = sidebar_config()
-    tab_run, tab_analyzer = st.tabs(["Run Viewer", "Dataset Analyzer"])
+    tab_run, tab_analyzer, tab_evidence = st.tabs(
+        ["Run Viewer", "Dataset Analyzer", "Evidence"])
     with tab_run:
         run_viewer(toolkit_dir, config)
     with tab_analyzer:
         dataset_analyzer(toolkit_dir, config)
+    with tab_evidence:
+        evidence_browser()
 
 
 if __name__ == "__main__":

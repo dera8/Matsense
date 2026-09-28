@@ -43,6 +43,7 @@ from collections import OrderedDict, deque
 import json
 import math
 import sys
+import traceback
 import threading
 import time
 import weakref
@@ -418,11 +419,22 @@ def sample_alignment_distances(
 
 
 def parked_transform_from_entry(world: "carla.World", item: dict, z_offset: float) -> "carla.Transform":
+    """Where a parked vehicle stands, taking the road's own attitude if given.
+
+    Yaw alone is right only on flat ground. Parked vehicles have their physics
+    switched off immediately after spawning, so nothing settles them onto a
+    slope afterwards: on the parking lane beside route 05, which climbs from
+    2.5 m to 8.0 m, a car placed with pitch zero sits with one end buried and
+    the other in the air and stays that way for the whole run. Pitch and roll
+    are optional and default to zero, so every scenario written before this
+    keeps the transform it had.
+    """
     raw = item["start"]
-    heading = float(item.get("heading", 0.0))
     return carla.Transform(
         carla.Location(x=float(raw[0]), y=float(raw[1]), z=float(raw[2]) + z_offset),
-        carla.Rotation(yaw=heading),
+        carla.Rotation(yaw=float(item.get("heading", 0.0)),
+                       pitch=float(item.get("pitch", 0.0)),
+                       roll=float(item.get("roll", 0.0))),
     )
 
 
@@ -548,6 +560,157 @@ def transform_parked_spawn_positions(
                 updated[key] = coords
         transformed.append(updated)
     return transformed
+
+
+def validate_points_against_map(road_map, points, label, max_median_m,
+                                mode="abort"):
+    """Refuse to place anything on a map it does not belong to.
+
+    A trajectory and a parked layout are both just numbers, and numbers are
+    right only relative to a convention. The one that bites here is the sign of
+    y: CARLA's y runs opposite to UTM northing, so a file stored before the flip
+    describes the mirror image of the street. Every internal check on such a
+    file passes, because it is self-consistent; it is only against the map that
+    it is eighty metres out, and the symptom is a vehicle placed where no
+    geometry was ever built, falling forever.
+
+    So the map is asked. If the points sit far from every driving lane, the run
+    stops and says so, and it also reports whether flipping y would fix it,
+    because that names the cause instead of leaving a distance to interpret.
+    """
+    if not points:
+        return True
+    def median_distance(pts):
+        out = []
+        for x, y in pts:
+            wp = road_map.get_waypoint(carla.Location(x=float(x), y=float(y), z=0.0),
+                                       project_to_road=True,
+                                       lane_type=carla.LaneType.Driving)
+            if wp is not None:
+                out.append(math.hypot(wp.transform.location.x - float(x),
+                                      wp.transform.location.y - float(y)))
+        if not out:
+            return float("inf")
+        out.sort()
+        return out[len(out) // 2]
+
+    sample = points[::max(1, len(points) // 200)]
+    d = median_distance(sample)
+    if d <= max_median_m:
+        print(f"[toolkit] {label}: {d:.2f} m mediani dalla corsia piu' vicina, "
+              "coerente con questa mappa", flush=True)
+        return True
+
+    flipped = median_distance([(x, -y) for x, y in sample])
+    msg = (f"{label} NON appartiene a questa mappa: {d:.1f} m mediani dalla "
+           f"corsia piu' vicina, contro un limite di {max_median_m:.1f} m.")
+    if flipped <= max_median_m:
+        msg += (f" Invertendo il segno di y lo scarto scende a {flipped:.2f} m: "
+                "il file e' salvato prima del ribaltamento che CARLA richiede, "
+                "e va convertito invece che caricato cosi'.")
+    else:
+        msg += (" Nemmeno invertendo y i punti cadono sulla strada: probabile "
+                "offset UTM sbagliato, o file costruito per un'altra mappa.")
+    if mode == "abort":
+        raise SystemExit(f"[toolkit] {msg}")
+    print(f"[toolkit] ATTENZIONE: {msg}", flush=True)
+    return False
+
+
+def lateral_offset_from_trajectory(
+    x: float, y: float, poses: list[dict]
+) -> tuple[float, float, int]:
+    """Signed distance from the driven line, measured across its local tangent.
+
+    Distance to the nearest recorded pose is not the quantity that decides
+    whether a parked car blocks the ego: between two samples the line runs
+    straight, and a car beside the midpoint of a long segment is nearer the
+    segment than it is to either endpoint. The clearance a vehicle actually has
+    is its distance to the segment, taken across that segment's own direction,
+    and the sign of that distance says which side it stands on.
+
+    Returns the signed lateral offset, the distance travelled along the line to
+    the foot of the perpendicular, and the index of the segment used. Positive
+    is left of the direction of travel.
+    """
+    if len(poses) < 2:
+        return 0.0, 0.0, 0
+    best = (float("inf"), 0.0, 0.0, 0)
+    travelled = 0.0
+    for i in range(len(poses) - 1):
+        ax, ay = poses[i]["x"], poses[i]["y"]
+        bx, by = poses[i + 1]["x"], poses[i + 1]["y"]
+        dx, dy = bx - ax, by - ay
+        seg = math.hypot(dx, dy)
+        if seg < 1e-9:
+            continue
+        ux, uy = dx / seg, dy / seg
+        t = max(0.0, min(seg, (x - ax) * ux + (y - ay) * uy))
+        fx, fy = ax + ux * t, ay + uy * t
+        d = math.hypot(x - fx, y - fy)
+        if d < best[0]:
+            # Left normal of the direction of travel, so the sign is the side.
+            lateral = (x - fx) * (-uy) + (y - fy) * ux
+            best = (d, lateral, travelled + t, i)
+        travelled += seg
+    return best[1], best[2], best[3]
+
+
+def resolve_parked_ego_lane_conflicts(
+    positions: list[dict],
+    poses: list[dict],
+    clearance_m: float,
+) -> tuple[list[dict], list[dict]]:
+    """Push aside only the parked vehicles that stand in the ego's way.
+
+    A layout recovered from a recording carries the recording's own localization
+    error, and on a reconstruction without parking lanes some vehicles land
+    inside the single drivable lane. Discarding them loses scene content that is
+    real; moving every vehicle to a common offset discards the measurement. So
+    only those below the clearance are moved, and only far enough to reach it,
+    along the local normal and away from the line, keeping the side they were
+    found on.
+
+    The input list is never mutated: the caller's JSON stays the record of what
+    was recovered, and what was driven is written to the validation report.
+    """
+    if not positions or len(poses) < 2 or clearance_m <= 0.0:
+        return [dict(p) for p in positions], []
+    out: list[dict] = []
+    corrections: list[dict] = []
+    for item in positions:
+        updated = dict(item)
+        start = list(updated.get("start") or [0.0, 0.0, 0.0])
+        while len(start) < 3:
+            start.append(0.0)
+        x, y = float(start[0]), float(start[1])
+        lateral, along, seg = lateral_offset_from_trajectory(x, y, poses)
+        if abs(lateral) >= clearance_m:
+            updated["start"] = start
+            out.append(updated)
+            continue
+        ax, ay = poses[seg]["x"], poses[seg]["y"]
+        bx, by = poses[seg + 1]["x"], poses[seg + 1]["y"]
+        seg_len = math.hypot(bx - ax, by - ay) or 1.0
+        ux, uy = (bx - ax) / seg_len, (by - ay) / seg_len
+        nx, ny = -uy, ux
+        # A vehicle sitting exactly on the line has no recovered side; push it
+        # right, the side a parked car takes where traffic drives on the right.
+        side = 1.0 if lateral > 0 else (-1.0 if lateral < 0 else -1.0)
+        shift = clearance_m - abs(lateral)
+        start[0] = x + side * nx * shift
+        start[1] = y + side * ny * shift
+        updated["start"] = start
+        out.append(updated)
+        corrections.append({
+            "from": [round(x, 3), round(y, 3)],
+            "to": [round(start[0], 3), round(start[1], 3)],
+            "lateral_before_m": round(lateral, 3),
+            "lateral_after_m": round(side * clearance_m, 3),
+            "shift_m": round(shift, 3),
+            "along_m": round(along, 1),
+        })
+    return out, corrections
 
 
 def normalize_dynamic_actor_specs(
@@ -948,9 +1111,18 @@ class DatasetRecorder:
         self.projection_debug_dir = self.root / 'projection_debug'
         self.lidar_raw_dir = self.root / 'lidar_raw'
         self.lidar_labels_dir = self.root / 'lidar_labels'
+        # The agent's own cloud, before and after the closed-loop operator. It is
+        # a different sensor from lidar_raw/ above, and a different quantity from
+        # pseudo_final: this is what the driving agent actually reads.
+        self.agent_cloud_dir = self.root / 'agent_cloud'
+        self.lmdrive_rgb_dir = self.root / 'lmdrive_rgb'
         for d in [self.rgb_dir, self.semantic_dir, self.semantic_vis_dir,
-                  self.projection_debug_dir, self.lidar_raw_dir, self.lidar_labels_dir]:
+                  self.projection_debug_dir, self.lidar_raw_dir, self.lidar_labels_dir,
+                  self.agent_cloud_dir]:
             d.mkdir(parents=True, exist_ok=True)
+        if getattr(args, "lmdrive_rig", False):
+            for view in ("rgb_front", "rgb_left", "rgb_right", "rgb_rear"):
+                (self.lmdrive_rgb_dir / view).mkdir(parents=True, exist_ok=True)
 
         self.frame_meta_csv = self.root / 'frame_metadata.csv'
         # A cloud and an image are only usable together if the consumer can
@@ -1213,8 +1385,10 @@ class DatasetRecorder:
                    projected_points: int = 0, known_material_points: int = 0,
                    instance_ids: np.ndarray | None = None,
                    ego_state: dict | None = None,
-                   actor_states: list | None = None):
+                   actor_states: list | None = None,
+                   agent_cloud: dict | None = None):
         payload = {
+            'agent_cloud': agent_cloud,
             'instance_ids': None if instance_ids is None else np.asarray(instance_ids).astype(np.uint32, copy=True),
             'ego_state': dict(ego_state or {}),
             'actor_states': list(actor_states or []),
@@ -1293,6 +1467,10 @@ class DatasetRecorder:
             pack['instance_id'] = np.asarray(instance_ids).astype(np.uint32)
         np.savez_compressed(self.lidar_labels_dir / f'{stem}.npz', **pack)
 
+        ac = payload.get('agent_cloud')
+        if ac:
+            np.savez_compressed(self.agent_cloud_dir / f'{stem}.npz', **ac)
+
         if actor_states:
             with open(self.actors_csv, 'a', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
@@ -1332,7 +1510,20 @@ class CarlaLidarViewer:
         self.client = carla.Client(args.host, args.port)
         self._validate_server_compatibility()
         self.world = self._connect_initial_world()
+        # What to put back on exit, which is not simply what was found. This
+        # tool is the one that drives synchronous mode, so a world already in it
+        # is the residue of a previous run that died before restoring it, and
+        # capturing that as "original" makes every later run faithfully restore
+        # a world nothing is ticking. A vehicle spawned there receives gravity
+        # once and never the steps that would settle it, so it falls and keeps
+        # falling: the symptom reads as a broken map or a bad trajectory, and
+        # survives every restart, because each run carefully reinstates it.
         self.original_settings = self.world.get_settings()
+        if self.original_settings.synchronous_mode:
+            print("[toolkit] il mondo era gia' in sincrono: residuo di una run "
+                  "interrotta, al termine verra' rimesso in asincrono", flush=True)
+            self.original_settings.synchronous_mode = False
+            self.original_settings.fixed_delta_seconds = None
         self.tm = self.client.get_trafficmanager(args.tm_port)
         self.tm.set_synchronous_mode(True)
 
@@ -1345,6 +1536,7 @@ class CarlaLidarViewer:
         self.map = self.world.get_map()
         self.actors = []
         self.vehicle = None
+        self._srunner = None
         self.rgb_cam = None
         self.sem_cam = None
         self.lidar = None
@@ -1446,9 +1638,48 @@ class CarlaLidarViewer:
                 shift_z=float(getattr(args, "parked_shift_z", 0.0)),
                 scale=float(getattr(args, "parked_scale", 1.0)),
             )
+            self.parked_lane_corrections = []
+            if getattr(args, "parked_avoid_ego_lane", False):
+                (self.parked_spawn_positions,
+                 self.parked_lane_corrections) = resolve_parked_ego_lane_conflicts(
+                    self.parked_spawn_positions,
+                    self.trajectory_poses,
+                    float(getattr(args, "parked_clearance_m", 2.5)),
+                )
+                print(f"[toolkit] parked_json: {len(self.parked_lane_corrections)} "
+                      f"veicoli spostati fuori dalla corsia dell'ego "
+                      f"(clearance {float(getattr(args, 'parked_clearance_m', 2.5)):.2f} m)",
+                      flush=True)
+        # Both inputs are checked before anything is spawned: the trajectory
+        # because the ego follows it, the layout because a vehicle standing in
+        # the void still returns nothing to the LiDAR and quietly empties the
+        # scene the measurement depends on.
+        _mode = str(getattr(args, "validate_against_map", "abort"))
+        if _mode != "off":
+            _max = float(getattr(args, "validate_max_median_m", 8.0))
+            if self.trajectory_poses:
+                validate_points_against_map(
+                    self.map, [(p["x"], p["y"]) for p in self.trajectory_poses],
+                    "traiettoria", _max, _mode)
+            if self.parked_spawn_positions:
+                validate_points_against_map(
+                    self.map,
+                    [(p["start"][0], p["start"][1])
+                     for p in self.parked_spawn_positions if p.get("start")],
+                    "veicoli in sosta", _max, _mode)
+
+        self.walker_specs = []
+        if getattr(args, "walkers_json", None):
+            walker_data = json.loads(Path(args.walkers_json).read_text(encoding="utf-8"))
+            self.walker_specs = list(walker_data.get("walkers", []))
+        self.walker_states = []
         self.dynamic_actor_specs = []
         self.dynamic_actor_states = []
         self.parked_actor_states = []
+        # exists even when no traffic is requested, so a consumer never has to
+        # guard the attribute to find out whether the run had any
+        self.tm_vehicles = []
+        self.ambient_walkers = []
         self.hazard_obstacle_actor = None
         self.hazard_obstacle_position = None
         self.first_obstacle_in_range_progress_m = None
@@ -1704,8 +1935,145 @@ class CarlaLidarViewer:
             "bev": pygame.Rect(right_x, content_top + status_h + gap + controls_h + gap, right_w, bev_h),
         }
 
+    def _register_hero_with_provider(self):
+        """Put the ego where a ScenarioRunner-based agent expects to find it.
+
+        Agents written for the Leaderboard reach the ego through
+        CarlaDataProvider.get_hero_actor(), which walks the provider's own actor
+        pool looking for role_name 'hero'. The Leaderboard runner fills that pool;
+        this harness spawns the ego itself, so the lookup returns None and the
+        agent dies on the first tick with an AttributeError about NoneType - a
+        message that says nothing about the actual cause.
+
+        There is more than one such registry, and which one an agent reads is
+        decided by an import that can fail for an unrelated reason. Autoware's
+        agent asks for srunner's provider and the Leaderboard's Track in a single
+        try block, so on a machine without the leaderboard package - this one -
+        the whole block falls through to PCLA's bundled copy under
+        leaderboard_codes, a different class holding a different, empty pool.
+        Registering in one and reading from the other looks exactly like not
+        registering at all: get_hero_actor() returns None and the agent dies on
+        the first tick with an AttributeError naming neither.
+
+        So every provider that imports gets the ego, and the count is printed.
+        The classes are independent registries, so filling a spare one costs a
+        dictionary entry and removes a whole class of silent mismatch.
+        """
+        if self.vehicle is None:
+            return
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        try:
+            import srunner_bridge
+            srunner_bridge.available()
+        except Exception:
+            pass
+        pcla_dir = getattr(self.args, "pcla_dir", "") or ""
+        if pcla_dir and pcla_dir not in sys.path:
+            sys.path.insert(0, pcla_dir)
+
+        done = []
+        for mod in ("srunner.scenariomanager.carla_data_provider",
+                    "leaderboard_codes.carla_data_provider"):
+            try:
+                provider = __import__(mod, fromlist=["CarlaDataProvider"])
+                cdp = provider.CarlaDataProvider
+                cdp.set_client(self.client)
+                cdp.set_world(self.world)
+                # The pool entry is the whole fix, and register_actor is not part
+                # of it. get_hero_actor() walks _carla_actor_pool alone; what
+                # register_actor fills are the velocity, location and transform
+                # caches, which is why PCLA calling it during setup_sensors still
+                # left the lookup empty. Calling it here would be worse than
+                # useless: it refuses an actor it already holds, so PCLA's own
+                # call moments later raises KeyError and takes the run with it.
+                cdp._carla_actor_pool[self.vehicle.id] = self.vehicle
+                done.append(mod.split(".")[0])
+            except Exception as exc:
+                print(f"[toolkit] provider {mod.split('.')[0]} non registrato: {exc}",
+                      flush=True)
+        if done:
+            print(f"[toolkit] ego registrato in {', '.join(done)} "
+                  f"(id={self.vehicle.id}, role={self.vehicle.attributes.get('role_name')})",
+                  flush=True)
+
+    def _start_srunner_scenario(self):
+        """Build the official scenario this run was asked for, if any.
+
+        Only reached once the ego and every hand-placed actor exist, because the
+        scenario measures from the ego's transform and spawns its own actors
+        relative to it. A scenario that cannot be built stops the run rather than
+        letting it continue as an unmarked baseline: a campaign cell that
+        silently lost its hazard is worse than one that failed.
+        """
+        name = getattr(self.args, "srunner_scenario", "") or ""
+        route = getattr(self.args, "srunner_route", "") or ""
+        if not name and not route:
+            return
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import srunner_bridge
+        if not srunner_bridge.available():
+            raise RuntimeError(
+                "--srunner-scenario chiesto ma ScenarioRunner non si importa. "
+                "Indica SCENARIO_RUNNER_ROOT e CARLA_PYTHONAPI_ROOT.")
+        if route:
+            self._srunner = srunner_bridge.RouteScenarios(
+                self.world, self.client, self.vehicle, route,
+                tm_port=int(getattr(self.args, "tm_port", 8000)))
+            self._srunner.build_tree(self.vehicle)
+            s = self._srunner.summary()
+            print(f"[srunner] route {Path(route).name}: {s['built']} scenari "
+                  f"costruiti, {s['failed']} falliti, {s['actors']} attori, "
+                  f"tipi {', '.join(s['types'])}", flush=True)
+            for nm, why in self._srunner.failed:
+                print(f"[srunner]   NON costruito {nm}: {why}", flush=True)
+            return
+        params = {}
+        for item in getattr(self.args, "srunner_param", None) or []:
+            if "=" not in item:
+                raise ValueError(f"--srunner-param vuole chiave=valore, non {item!r}")
+            k, v = item.split("=", 1)
+            params[k.strip()] = v.strip()
+        self._srunner = srunner_bridge.ScenarioBridge(
+            self.world, self.client, self.vehicle, name, params,
+            tm_port=int(getattr(self.args, "tm_port", 8000)))
+        print(f"[srunner] scenario {name} costruito, "
+              f"{len(self._srunner.actors)} attori, parametri {params or '(default)'}",
+              flush=True)
+
+    def _tick_srunner(self):
+        """Advance the scenario's behaviour tree by one step.
+
+        Called after the world tick in every driving branch, never before: the
+        data provider caches poses per frame, so a tree ticked first would act on
+        the previous frame. Failures here are reported once and then left alone,
+        because a scenario that has finished its story is not an error and the
+        run still has to record the frames it promised.
+        """
+        if self._srunner is None:
+            return
+        try:
+            self._srunner.tick()
+        except Exception as exc:
+            print(f"[srunner] tick fallito, scenario disattivato: {exc}", flush=True)
+            self._srunner = None
+
+    def _stop_srunner_scenario(self):
+        if self._srunner is None:
+            return
+        print(f"[srunner] {self._srunner.summary()}", flush=True)
+        self._srunner.cleanup()
+        self._srunner = None
+
     def destroy(self):
-        self._write_run_summary()
+        self._stop_srunner_scenario()
+        # A failure before the session exists used to raise here and replace the
+        # real traceback with an AttributeError about a missing attribute, which
+        # says nothing about what actually went wrong. The summary is best-effort
+        # during teardown; the original exception is the one worth seeing.
+        try:
+            self._write_run_summary()
+        except Exception as exc:
+            print(f"[toolkit] run_summary non scritto: {exc}", flush=True)
         batch_fast_shutdown = os.environ.get("MATSENSE_FORCE_EXIT_ON_SHUTDOWN", "").strip() == "1"
         for buffer_name in (
             "rgb_buffer",
@@ -1850,6 +2218,162 @@ class CarlaLidarViewer:
                 self.hazard_obstacle_position = (float(loc.x), float(loc.y), float(loc.z))
             spawned += 1
         print(f"[toolkit] parked_json: spawned {spawned}/{len(positions)} failed={failures}", flush=True)
+        self._settle_parked_actors()
+        self._write_parked_validation_report(len(positions), spawned, failures)
+
+    def _write_startup_diagnostics(self, spawn, used_fallback):
+        """What the run was actually given, written where it can be read later.
+
+        A vehicle that ends up somewhere with no ground under it looks the same
+        from the outside whatever put it there: a trajectory in the wrong frame,
+        a spawn that fell back, a world left in synchronous mode by a previous
+        run. Those have different fixes, and telling them apart after the fact
+        needs the state at startup, which otherwise exists only in a terminal
+        someone has already closed.
+
+        Always to the same path, so it can be read without arranging anything
+        in advance.
+        """
+        path = Path(getattr(self.args, "startup_diagnostics_json", "")
+                    or "/tmp/matsense_last_startup.json")
+        poses = self.trajectory_poses or []
+        try:
+            settings = self.world.get_settings()
+            sync = bool(settings.synchronous_mode)
+        except Exception:                                  # noqa: BLE001
+            sync = None
+        info = {
+            "map": str(self.world.get_map().name),
+            "synchronous_mode": sync,
+            "traj_json": getattr(self.args, "traj_json", "") or "",
+            "traj_txt": getattr(self.args, "traj_txt", "") or "",
+            "follow_mode": getattr(self.args, "follow_mode", ""),
+            "n_poses": len(poses),
+            "first_pose": ({"x": round(poses[0]["x"], 3),
+                            "y": round(poses[0]["y"], 3),
+                            "z": round(poses[0].get("z", 0.0), 3),
+                            "yaw": round(poses[0]["yaw"], 2)} if poses else None),
+            "pose_extent": ({"x": [round(min(p["x"] for p in poses), 1),
+                                   round(max(p["x"] for p in poses), 1)],
+                             "y": [round(min(p["y"] for p in poses), 1),
+                                   round(max(p["y"] for p in poses), 1)]}
+                            if poses else None),
+            "ego_spawned_at": {"x": round(float(spawn.location.x), 3),
+                               "y": round(float(spawn.location.y), 3),
+                               "z": round(float(spawn.location.z), 3),
+                               "yaw": round(float(spawn.rotation.yaw), 2)},
+            "used_fallback_spawn": bool(used_fallback),
+            "trajectory_idx_at_start": int(self.trajectory_idx),
+            "parked_json": getattr(self.args, "parked_json", "") or "",
+            "n_parked_requested": len(self.parked_spawn_positions or []),
+            "physics_disabled": getattr(self.args, "follow_mode", "") == "teleport",
+        }
+        try:
+            path.write_text(json.dumps(info, indent=2), encoding="utf-8")
+            print(f"[toolkit] diagnostica di avvio -> {path}", flush=True)
+        except Exception as exc:                           # noqa: BLE001
+            print(f"[toolkit] diagnostica non scritta: {exc}", flush=True)
+
+    def _write_parked_validation_report(self, requested, spawned, failures):
+        """Where every parked vehicle ended up, and how far it is from the drive.
+
+        The layout that was driven is not the layout on disk: vehicles are
+        lifted, settled, and some are pushed out of the ego's lane. Without a
+        record of the difference, a scene cannot be checked afterwards and a
+        hovering or blocking car is found only by watching the video, which is
+        how the last three defects were found.
+        """
+        path = getattr(self.args, "parked_report_json", "") or ""
+        if not path:
+            root = getattr(self.args, "dataset_root", "") or "."
+            name = getattr(self.args, "scenario_name", "run") or "run"
+            path = str(Path(root) / "parked_reports" / f"{name}_parked.json")
+        rows = []
+        for state in self.parked_actor_states:
+            actor = state["actor"]
+            try:
+                tf = actor.get_transform()
+            except Exception:                              # noqa: BLE001
+                continue
+            lateral, along, _seg = lateral_offset_from_trajectory(
+                float(tf.location.x), float(tf.location.y), self.trajectory_poses)
+            rows.append({
+                "type_id": actor.type_id,
+                "final": [round(float(tf.location.x), 3),
+                          round(float(tf.location.y), 3),
+                          round(float(tf.location.z), 3)],
+                "requested": [round(float(v), 3) for v in state["spec"].get("start", [])],
+                "yaw": round(float(tf.rotation.yaw), 2),
+                "pitch": round(float(tf.rotation.pitch), 2),
+                "roll": round(float(tf.rotation.roll), 2),
+                "lateral_from_trajectory_m": round(lateral, 3),
+                "along_trajectory_m": round(along, 1),
+            })
+        lat = [abs(r["lateral_from_trajectory_m"]) for r in rows]
+        report = {
+            "scenario_name": getattr(self.args, "scenario_name", ""),
+            "parked_json": getattr(self.args, "parked_json", ""),
+            "requested": requested,
+            "spawned": spawned,
+            "failed": failures,
+            "corrected_into_clearance": len(getattr(self, "parked_lane_corrections", [])),
+            "clearance_m": float(getattr(self.args, "parked_clearance_m", 2.5)),
+            "avoid_ego_lane": bool(getattr(self.args, "parked_avoid_ego_lane", False)),
+            "settle_ticks": int(getattr(self.args, "parked_settle_ticks", 0) or 0),
+            "z_offset": float(getattr(self.args, "parked_z_offset", 0.5)),
+            "min_lateral_m": round(min(lat), 3) if lat else None,
+            "median_lateral_m": round(sorted(lat)[len(lat) // 2], 3) if lat else None,
+            "corrections": getattr(self, "parked_lane_corrections", []),
+            "vehicles": rows,
+        }
+        try:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(json.dumps(report, indent=2), encoding="utf-8")
+            print(f"[toolkit] parked_json: report di validazione -> {path}", flush=True)
+        except Exception as exc:                           # noqa: BLE001
+            print(f"[toolkit] parked_json: report non scritto: {exc}", flush=True)
+
+    def _settle_parked_actors(self):
+        """Let the lifted vehicles fall onto the road, then freeze them there.
+
+        A vehicle is spawned above its target height because try_spawn_actor
+        refuses a transform whose mesh intersects the road, and its physics is
+        switched off immediately afterwards so that nothing pushes it out of
+        place. The two together mean the lift never comes off: measured on the
+        fortiss layout the gap under the wheels equals the lift exactly, so the
+        default 0.5 m leaves every parked car hovering half a metre for the
+        whole run, in the clouds as well as on screen.
+
+        Running physics for a few frames first costs those frames and puts the
+        wheels on the ground. Default zero, so scenarios that were authored
+        against the old behaviour are untouched.
+        """
+        ticks = int(getattr(self.args, "parked_settle_ticks", 0) or 0)
+        actors = [s["actor"] for s in self.parked_actor_states]
+        if ticks <= 0 or not actors:
+            return
+        before = [a.get_location().z for a in actors]
+        for a in actors:
+            try:
+                a.set_simulate_physics(True)
+            except Exception:
+                pass
+        for _ in range(ticks):
+            try:
+                self.world.tick()
+            except Exception:
+                break
+        for a in actors:
+            try:
+                a.set_target_velocity(carla.Vector3D(0.0, 0.0, 0.0))
+                a.set_target_angular_velocity(carla.Vector3D(0.0, 0.0, 0.0))
+                a.set_simulate_physics(False)
+            except Exception:
+                pass
+        after = [a.get_location().z for a in actors]
+        drop = [b - a_ for b, a_ in zip(before, after)]
+        print(f"[toolkit] parked_json: assestamento {ticks} tick, "
+              f"caduta mediana {sorted(drop)[len(drop) // 2]:.2f} m", flush=True)
 
     def _spawn_dynamic_actors_from_json(self):
         self.dynamic_actor_states = []
@@ -1965,6 +2489,266 @@ class CarlaLidarViewer:
                 self.hazard_obstacle_position = (float(loc.x), float(loc.y), float(loc.z))
             spawned += 1
         print(f"[toolkit] dynamic_json: spawned {spawned}/{len(self.dynamic_actor_specs)} failed={failures}", flush=True)
+
+    def _spawn_walkers_from_json(self):
+        """Pedestrians, driven by WalkerControl rather than by target velocity.
+
+        Vehicles in this harness are moved by setting a target velocity, which
+        is right for a rigid body. A pedestrian is not one: driven that way the
+        mesh slides along the ground in its idle pose, and the LiDAR sees a
+        rigid shape where a real return comes off swinging limbs. WalkerControl
+        is CARLA's own interface for them and animates the skeleton, so the
+        cloud carries the structure a pedestrian actually has, which is the
+        whole reason for putting one in a sensing study.
+
+        Walkers are also spawned NOT invincible: a collision that the harness
+        cannot register is a failure it cannot report.
+        """
+        if not self.walker_specs:
+            return
+        library = self.world.get_blueprint_library()
+        spawned, failures = 0, 0
+        for item in self.walker_specs:
+            bp_id = str(item.get("blueprint_id", "")).strip()
+            # Never a random choice: picking a blueprint from the RNG would tie
+            # the scene to a stream that advances differently in each sensing
+            # arm, and the three would stop being comparable. Named, or the
+            # first of the library in its own order.
+            candidates = list(library.filter("walker.pedestrian.*"))
+            if not candidates:
+                print("[toolkit] walkers: nessun blueprint pedone disponibile",
+                      flush=True)
+                return
+            try:
+                bp = library.find(bp_id) if bp_id else candidates[0]
+            except Exception:
+                print(f"[toolkit] walkers: blueprint '{bp_id}' non trovato, "
+                      f"uso {candidates[0].id}", flush=True)
+                bp = candidates[0]
+            if bp.has_attribute("is_invincible"):
+                bp.set_attribute("is_invincible", "false")
+            raw = item["start"]
+            tf = carla.Transform(
+                carla.Location(x=float(raw[0]), y=float(raw[1]),
+                               z=float(raw[2]) + float(getattr(self.args, "walker_z_offset", 0.6))),
+                carla.Rotation(yaw=float(item.get("heading", 0.0))),
+            )
+            actor = self.world.try_spawn_actor(bp, tf)
+            if actor is None:
+                failures += 1
+                continue
+            segments = [{"heading_deg": float(g.get("heading", item.get("heading", 0.0))),
+                         "speed_mps": float(g.get("speed_mps", 1.4)),
+                         "duration_s": float(g.get("duration_s", 4.0))}
+                        for g in (item.get("motion_segments") or [])]
+            if not segments:
+                segments = [{"heading_deg": float(item.get("heading", 0.0)),
+                             "speed_mps": float(item.get("speed_mps", 1.4)),
+                             "duration_s": float(item.get("active_duration_s", 4.0))}]
+            trig = item.get("trigger_point") or item.get("start")
+            if (getattr(self.args, "hazard_obstacle_source", "none") == "first_walker"
+                    and self.hazard_obstacle_actor is None):
+                self.hazard_obstacle_actor = actor
+                loc = actor.get_location()
+                self.hazard_obstacle_position = (float(loc.x), float(loc.y), float(loc.z))
+            self.actors.append(actor)
+            self.walker_states.append({
+                "actor": actor,
+                "trigger_point": (float(trig[0]), float(trig[1])),
+                "trigger_distance_m": float(item.get("trigger_distance_m", 12.0)),
+                "motion_segments": segments,
+                "active_duration_s": sum(g["duration_s"] for g in segments),
+                "triggered": False, "done": False, "start_time_s": None,
+            })
+            spawned += 1
+        print(f"[toolkit] walkers: spawned {spawned}/{len(self.walker_specs)} "
+              f"failed={failures}", flush=True)
+
+    def _update_walkers(self):
+        if self.vehicle is None or not self.walker_states:
+            return
+        ego = self.vehicle.get_location()
+        now = float(self.world.get_snapshot().timestamp.elapsed_seconds)
+        for st in self.walker_states:
+            actor = st["actor"]
+            if st["done"] or actor is None or not actor.is_alive:
+                continue
+            if not st["triggered"]:
+                d = math.hypot(float(ego.x) - st["trigger_point"][0],
+                               float(ego.y) - st["trigger_point"][1])
+                if d > st["trigger_distance_m"]:
+                    continue
+                st["triggered"] = True
+                st["start_time_s"] = now
+                print(f"[toolkit] walker triggered: dist={d:.2f}m", flush=True)
+            elapsed = now - float(st["start_time_s"] or now)
+            if elapsed >= st["active_duration_s"]:
+                try:
+                    actor.apply_control(carla.WalkerControl(
+                        carla.Vector3D(0.0, 0.0, 0.0), 0.0, False))
+                except Exception:
+                    pass
+                st["done"] = True
+                continue
+            acc = 0.0
+            seg = st["motion_segments"][-1]
+            for g in st["motion_segments"]:
+                if elapsed < acc + g["duration_s"]:
+                    seg = g
+                    break
+                acc += g["duration_s"]
+            h = math.radians(seg["heading_deg"])
+            try:
+                actor.apply_control(carla.WalkerControl(
+                    carla.Vector3D(math.cos(h), math.sin(h), 0.0),
+                    float(seg["speed_mps"]), False))
+            except Exception:
+                pass
+
+    def _spawn_ambient_walkers(self):
+        """Background pedestrians that walk, rather than follow a line.
+
+        CARLA has an AI controller for walkers backed by the map's navigation
+        mesh: given a destination it routes there, keeps to walkable surfaces,
+        steps around obstacles and animates properly. That is what a person in
+        the background should do, and scripting them with headings and
+        durations would be inventing a worse version of it.
+
+        The scenario's OWN hazard pedestrian is deliberately not one of these.
+        A CPNCO test turns on the pedestrian reaching the ego's path at a
+        defined moment, and a navigating walker arrives when its route lets it;
+        the physical test uses a dummy driven along a rail for the same reason.
+        So: ambient pedestrians navigate, the hazard is scripted, and the two
+        are different mechanisms on purpose.
+
+        Determinism is pinned with set_pedestrians_seed, which is CARLA's own
+        hook for it. Without that the destinations are drawn from a stream that
+        differs between runs and the three sensing arms would each get their
+        own crowd.
+        """
+        n = int(getattr(self.args, "ambient_walkers", 0) or 0)
+        if n <= 0:
+            return
+        seed = int(getattr(self.args, "pcla_perturb_seed", 1234))
+        try:
+            self.world.set_pedestrians_seed(seed)
+        except Exception as exc:
+            print(f"[toolkit] pedoni ambiente: seme non fissato ({exc}). Le tre "
+                  f"configurazioni possono divergere: NON usare per un confronto.",
+                  flush=True)
+
+        library = self.world.get_blueprint_library()
+        walker_bps = list(library.filter("walker.pedestrian.*"))
+        ctrl_bp = library.find("controller.ai.walker")
+        if not walker_bps:
+            print("[toolkit] pedoni ambiente: nessun blueprint disponibile", flush=True)
+            return
+
+        ego = self.vehicle.get_location() if self.vehicle is not None else None
+        keep = float(getattr(self.args, "ambient_keep_clear_m", 8.0))
+        spawned = 0
+        for i in range(n * 4):          # some draws land off the mesh
+            if spawned >= n:
+                break
+            loc = self.world.get_random_location_from_navigation()
+            if loc is None:
+                continue
+            if ego is not None and loc.distance(ego) < keep:
+                continue
+            bp = walker_bps[i % len(walker_bps)]
+            if bp.has_attribute("is_invincible"):
+                bp.set_attribute("is_invincible", "false")
+            walker = self.world.try_spawn_actor(bp, carla.Transform(loc))
+            if walker is None:
+                continue
+            ctrl = self.world.try_spawn_actor(ctrl_bp, carla.Transform(),
+                                              attach_to=walker)
+            if ctrl is None:
+                walker.destroy()
+                continue
+            try:
+                ctrl.start()
+                dest = self.world.get_random_location_from_navigation()
+                if dest is not None:
+                    ctrl.go_to_location(dest)
+                ctrl.set_max_speed(float(getattr(self.args,
+                                                 "ambient_walker_speed", 1.4)))
+            except Exception:
+                ctrl.destroy(); walker.destroy()
+                continue
+            self.actors.extend([ctrl, walker])
+            self.ambient_walkers.append(walker)
+            spawned += 1
+        print(f"[toolkit] pedoni ambiente: {spawned}/{n} in navigazione "
+              f"(seme {seed})", flush=True)
+
+    def _spawn_traffic_manager_vehicles(self):
+        """Background traffic driven by CARLA, not by a table of headings.
+
+        The scenario JSON drives its actors open loop: constant heading and
+        speed for a duration, no steering, no lane following and no reaction to
+        anything. That is adequate for a hazard scripted to cross at a known
+        moment, and it is visibly wrong for traffic, which has to hold a lane
+        through a bend, stop at a light and brake behind whoever is in front.
+        The Traffic Manager already exists here for the ego's autopilot, so
+        traffic is handed to it instead.
+
+        DETERMINISM IS THE WHOLE DIFFICULTY. The three sensing configurations
+        must see the same scene or their difference is not about sensing, and
+        the Traffic Manager is stochastic. Two things are pinned: its random
+        device, and the spawn points, which are taken in map order rather than
+        sampled. What is NOT pinned, and cannot be from here, is that the
+        traffic reacts to the ego -- if the ego brakes earlier under one
+        configuration the traffic behind it will too. That is a real coupling
+        and it is the point of adding traffic, but it means the three arms are
+        no longer bit-comparable and the comparison has to be read as
+        behavioural rather than as a controlled perturbation.
+        """
+        n = int(getattr(self.args, "tm_traffic", 0) or 0)
+        if n <= 0:
+            return
+        seed = int(getattr(self.args, "pcla_perturb_seed", 1234))
+        try:
+            self.tm.set_random_device_seed(seed)
+        except Exception as exc:
+            print(f"[toolkit] traffico: seme del Traffic Manager non fissato ({exc}). "
+                  f"Le tre configurazioni possono divergere: NON usare per un confronto.",
+                  flush=True)
+
+        spawns = self.world.get_map().get_spawn_points()
+        ego_loc = self.vehicle.get_location() if self.vehicle is not None else None
+        keep_clear = float(getattr(self.args, "tm_keep_clear_m", 12.0))
+        if ego_loc is not None:
+            spawns = [s for s in spawns
+                      if s.location.distance(ego_loc) > keep_clear]
+        # map order, never sampled: a shuffled list would tie the layout to the
+        # RNG stream, and the stream advances with the number of points in the
+        # cloud, which differs between the arms
+        blueprints = get_filtered_vehicle_blueprints(self.world)
+        if not blueprints or not spawns:
+            print("[toolkit] traffico: nessun punto di spawn o blueprint disponibile",
+                  flush=True)
+            return
+
+        for i, tf in enumerate(spawns):
+            if len(self.tm_vehicles) >= n:
+                break
+            bp = blueprints[i % len(blueprints)]
+            actor = self.world.try_spawn_actor(bp, tf)
+            if actor is None:
+                continue
+            try:
+                actor.set_autopilot(True, self.tm.get_port())
+                self.tm.ignore_lights_percentage(actor, 0.0)
+                self.tm.vehicle_percentage_speed_difference(
+                    actor, float(getattr(self.args, "tm_speed_delta_pct", 0.0)))
+            except Exception:
+                actor.destroy()
+                continue
+            self.actors.append(actor)
+            self.tm_vehicles.append(actor)
+        print(f"[toolkit] traffico: {len(self.tm_vehicles)}/{n} veicoli in autopilot "
+              f"(seme {seed}, punti di spawn in ordine di mappa)", flush=True)
 
     def _spawn_collision_sensor(self):
         if self.vehicle is None:
@@ -2097,15 +2881,20 @@ class CarlaLidarViewer:
         self.vehicle = None
         self.trajectory_idx = 0
         if self.trajectory_poses:
+            # try_spawn_actor refuses a transform whose mesh intersects the
+            # road, and a pose taken from the road surface puts the vehicle's
+            # origin exactly on it. Every pose is then refused, the run falls
+            # back to a map spawn point, and CARLA's own spawn points carry a
+            # lift for precisely this reason. So attempt with the same lift and
+            # keep the unlifted pose for the reset, which happens once physics
+            # is off and cannot be refused.
+            spawn_lift = float(getattr(self.args, "traj_spawn_lift", 0.3))
+            traj_z = float(getattr(self.args, "traj_z_offset", 0.0))
             for idx, pose in enumerate(self.trajectory_poses):
-                candidate = pose_to_road_transform(
-                    self.world,
-                    pose,
-                    float(getattr(self.args, "traj_z_offset", 0.0)),
-                )
+                candidate = pose_to_road_transform(self.world, pose, traj_z + spawn_lift)
                 self.vehicle = self.world.try_spawn_actor(veh_bp, candidate)
                 if self.vehicle is not None:
-                    spawn = candidate
+                    spawn = pose_to_road_transform(self.world, pose, traj_z)
                     self.trajectory_idx = idx
                     if idx:
                         print(
@@ -2116,6 +2905,7 @@ class CarlaLidarViewer:
                     break
         else:
             self.vehicle = self.world.try_spawn_actor(veh_bp, spawn)
+        used_fallback_spawn = False
         if self.vehicle is None:
             # fallback search across spawn points
             spawn_points = self.map.get_spawn_points()
@@ -2123,10 +2913,29 @@ class CarlaLidarViewer:
                 self.vehicle = self.world.try_spawn_actor(veh_bp, sp)
                 if self.vehicle is not None:
                     spawn = sp
+                    used_fallback_spawn = True
+                    print(
+                        "[toolkit] ATTENZIONE: nessuna posa della traiettoria era "
+                        "libera; ripiego su un punto di spawn della mappa in "
+                        f"({sp.location.x:.2f}, {sp.location.y:.2f}, {sp.location.z:.2f})",
+                        flush=True,
+                    )
                     break
+        if used_fallback_spawn and self.trajectory_poses:
+            # The fallback reassigns `spawn`, and the reset below teleports the
+            # ego to whatever `spawn` now holds. Left as it was, a run that fell
+            # back would freeze the vehicle on an arbitrary map spawn point
+            # instead of the trajectory, which on a partial reconstruction can
+            # be a point with no ground under it at all.
+            spawn = pose_to_road_transform(
+                self.world, self.trajectory_poses[0],
+                float(getattr(self.args, "traj_z_offset", 0.0)))
+            print("[toolkit] il reset riporta comunque l'ego sulla prima posa "
+                  "della traiettoria", flush=True)
         if self.vehicle is None:
             raise RuntimeError("Could not spawn vehicle")
         print(f"[toolkit] spawn_vehicle_and_sensors: ego spawned id={self.vehicle.id}", flush=True)
+        self._write_startup_diagnostics(spawn, used_fallback_spawn)
         self.actors.append(self.vehicle)
         self._spawn_collision_sensor()
         self.previous_follow_control = None
@@ -2144,6 +2953,11 @@ class CarlaLidarViewer:
         self._spawn_dynamic_actors_from_json()
         if self.dynamic_actor_states:
             print("[toolkit] spawn_vehicle_and_sensors: dynamic actor spawn done", flush=True)
+        self._spawn_walkers_from_json()
+        self._spawn_ambient_walkers()
+        self._spawn_traffic_manager_vehicles()
+        self._register_hero_with_provider()
+        self._start_srunner_scenario()
 
         if self.args.autopilot and not getattr(self.args, 'pcla_agent', ''):
             self.vehicle.set_autopilot(True, self.tm.get_port())
@@ -2194,6 +3008,9 @@ class CarlaLidarViewer:
             self.sem_cam = self.world.spawn_actor(sem_bp, cam_tf, attach_to=self.vehicle)
             self.actors.append(self.sem_cam)
             self.sem_cam.listen(self._make_camera_callback(self.sem_buffer, semantic=True))
+
+        if getattr(self.args, "lmdrive_rig", False):
+            self._spawn_lmdrive_rig(sensor_dt)
 
         lidar_bp = self.blueprints.find("sensor.lidar.ray_cast")
         lidar_bp.set_attribute("channels", str(self.args.channels))
@@ -2406,6 +3223,59 @@ class CarlaLidarViewer:
             weather = getattr(carla.WeatherParameters, "ClearNoon")
         self.world.set_weather(weather)
 
+    def _spawn_lmdrive_rig(self, sensor_dt):
+        """LMDrive's four cameras, with its own positions and fields of view.
+
+        Read off its sensors(): front at x=1.3 straight ahead 1200x900, left
+        and right at the same x at minus and plus sixty degrees, rear at
+        x=-1.3 turned by
+        one hundred and eighty, all at fov 100. The fifth view the model
+        receives, rgb_center, is not recorded: it is derived by cropping the
+        front view, which is what the agent does.
+
+        The images are written straight from the callback, with CARLA's frame
+        number in the name: that is the same key the clouds are saved under, so
+        the offline pairing is exact and they need not go through the buffer
+        pipeline.
+        """
+        import cv2
+        # The directories belong to DatasetRecorder, not to the viewer: the
+        # viewer reaches them through self.recorder, which exists only with
+        # --save-dataset. Without it the rig would have nowhere to write, and
+        # above all there would be no clouds to pair it with.
+        rec = getattr(self, "recorder", None)
+        if rec is None or not hasattr(rec, "lmdrive_rgb_dir"):
+            print("[toolkit] rig di LMDrive richiesto ma il dataset non viene "
+                  "salvato: niente telecamere, servirebbe --save-dataset",
+                  flush=True)
+            return
+        root = rec.lmdrive_rgb_dir
+        rig = [("rgb_front", 1.3, 0.0, 1200, 900),
+               ("rgb_left", 1.3, -60.0, 400, 300),
+               ("rgb_right", 1.3, 60.0, 400, 300),
+               ("rgb_rear", -1.3, 180.0, 400, 300)]
+
+        def _writer(folder):
+            def _cb(image):
+                arr = np.frombuffer(image.raw_data, dtype=np.uint8)
+                arr = arr.reshape((image.height, image.width, 4))[:, :, :3]
+                cv2.imwrite(str(folder / f"frame_{image.frame:06d}.png"), arr)
+            return _cb
+
+        for view, x, yaw, w, h in rig:
+            bp = self.blueprints.find("sensor.camera.rgb")
+            bp.set_attribute("image_size_x", str(w))
+            bp.set_attribute("image_size_y", str(h))
+            bp.set_attribute("fov", "100")
+            bp.set_attribute("sensor_tick", str(sensor_dt))
+            tf = carla.Transform(carla.Location(x=x, z=2.3),
+                                 carla.Rotation(yaw=yaw))
+            cam = self.world.spawn_actor(bp, tf, attach_to=self.vehicle)
+            self.actors.append(cam)
+            cam.listen(_writer(root / view))
+        print(f"[toolkit] rig di LMDrive: {len(rig)} viste sotto {root}",
+              flush=True)
+
     @staticmethod
     def _make_camera_callback(buffer_obj: SensorBuffer, semantic=False):
         def _callback(image):
@@ -2489,6 +3359,14 @@ class CarlaLidarViewer:
         self.rgb_array = rgb_payload
         self.lidar_frame = frame_id
         self.last_lidar = lidar_payload
+        # Open-loop replay uses the recorded ego pose but still needs the same
+        # sensor operator as a PCLA run. Apply it at the synchronized sensor
+        # boundary, before projection and dataset serialization.
+        if getattr(self.args, "open_loop_matsense", False) and self._pcla_session is not None:
+            self.last_lidar = self._pcla_session.get_perturbed_cloud(
+                lidar_payload, frame=frame_id
+            )
+            lidar_payload = self.last_lidar
         self.semantic_lidar_frame = frame_id
         self.last_semantic_lidar = semantic_lidar_payload
         self.sem_frame = frame_id
@@ -2698,6 +3576,37 @@ class CarlaLidarViewer:
         self._phase_acc = {}
         self._phase_last_loop = loop_count
         self._phase_n = n
+
+    def _agent_cloud_snapshot(self) -> dict | None:
+        """The agent's cloud before and after the operator, if a session owns it.
+
+        Distinct from lidar_raw/ (a different sensor) and from pseudo_final (a
+        different quantity, computed with range and incidence corrections and
+        without the level renormalisation). This is the pair the closed-loop
+        claim rests on, and until now it existed only inside the process.
+        """
+        sess = getattr(self, "_pcla_session", None)
+        c = getattr(sess, "last_cloud", None) if sess is not None else None
+        if not c:
+            return None
+        try:
+            out = {
+                "xyz_in": c["xyz_in"], "intensity_in": c["intensity_in"],
+                "material": np.asarray(c["material"]).astype(str),
+                "xyz_out": c["xyz_out"], "intensity_out": c["intensity_out"],
+            }
+            # The session already recovers the surviving points' materials; not
+            # carrying them here left every consumer to redo that work, or to
+            # guess. Approximate where jitter moved a point, which is why it is
+            # a separate field rather than an index into `material`.
+            if c.get("material_out") is not None:
+                out["material_out"] = np.asarray(c["material_out"]).astype(str)
+            # exactly which returns survived, so a consumer never has to guess
+            if c.get("keep") is not None:
+                out["keep"] = np.asarray(c["keep"], dtype=bool)
+            return out
+        except Exception:
+            return None
 
     def _collect_ego_state(self) -> dict:
         if self.vehicle is None:
@@ -3158,6 +4067,15 @@ class CarlaLidarViewer:
             return
         if self.args.follow_mode == "teleport":
             if self.trajectory_idx >= len(self.trajectory_poses):
+                # A teleported replay has nothing left to do once the recorded
+                # poses run out: the ego stops at the last one and every further
+                # tick re-records the same static view. The first run of this
+                # experiment spent 45000 loops that way, which is most of its
+                # wall clock, and only ended because it was killed by hand.
+                if not getattr(self, "_traj_exhausted", False):
+                    self._traj_exhausted = True
+                    print(f"[toolkit] traiettoria esaurita a {len(self.trajectory_poses)} "
+                          "pose: fine del replay", flush=True)
                 return
             tf = pose_to_road_transform(self.world, self.trajectory_poses[self.trajectory_idx], float(getattr(self.args, "traj_z_offset", 0.0)))
             self.vehicle.set_transform(tf)
@@ -3229,6 +4147,7 @@ class CarlaLidarViewer:
             instance_ids=color_info.get('obj_ids'),
             ego_state=self._collect_ego_state(),
             actor_states=self._collect_actor_states(ego_transform),
+            agent_cloud=self._agent_cloud_snapshot(),
         )
         self.rgb_buffer.discard_through(frame_id)
         self.sem_buffer.discard_through(frame_id)
@@ -3566,8 +4485,34 @@ class CarlaLidarViewer:
         scripts_dir = str(Path(__file__).resolve().parent)
         if scripts_dir not in sys.path:
             sys.path.insert(0, scripts_dir)
+        import matsense_closedloop as _mcl
         from matsense_closedloop import ClosedLoopSession, PerturbConfig, BehaviourLogger
-        _mode_map = {"material": "matsense", "intensity": "standard", "global": "global"}
+        # The operator keeps its own coefficient tables, built at import from the
+        # config's default_profile. apply_material_profile above rebinds this
+        # module's globals only, so without this call the two disagree silently:
+        # campaign 19 ran on realbag_empirical_v1 while every filename and the
+        # clog's profile_name column recorded realbag_empirical_v3.
+        _requested = str(getattr(self.args, "profile_name", "") or "")
+        _in_force = _mcl.apply_profile(_requested or None)
+        if _requested and _in_force != _requested:
+            raise RuntimeError(
+                f"profile mismatch: asked for {_requested!r}, operator applied "
+                f"{_in_force!r}. Refusing to run a campaign whose filenames "
+                f"would not describe its coefficients.")
+        print(f"[toolkit] operatore: profilo {_in_force} "
+              f"(beta = {dict(zip(_mcl._MATERIALS, _mcl._BASE_BY_CODE.round(4)))})",
+              flush=True)
+        # 'shuffled' is the material-assignment randomization control: the
+        # operator's own per-point factors, permuted inside range bins. It is a
+        # mode of the operator, not a profile, so the coefficients on the
+        # filename are still the calibrated ones and the profile guard above
+        # still means what it says.
+        # 'level' is the flat arm at a level chosen through MATSENSE_LEVEL,
+        # not at the level MatSense would deliver: it serves the sweep that
+        # looks for the intensity tolerance threshold.
+        _mode_map = {"material": "matsense", "intensity": "standard",
+                     "global": "global", "shuffled": "shuffled",
+                     "level": "level"}
         _session_mode = _mode_map.get(getattr(self.args, "mode", "intensity"), "standard")
         self._pcla_session = ClosedLoopSession(
             self.vehicle, self.world,
@@ -3575,6 +4520,9 @@ class CarlaLidarViewer:
             mode=_session_mode,
             cfg=PerturbConfig(
                 dropout_gain=float(getattr(self.args, "pcla_dropout_gain", 0.4)),
+                jitter_gain=float(getattr(self.args, "pcla_jitter_gain", 0.10)),
+                apply_intensity=not bool(getattr(self.args, "pcla_no_intensity", False)),
+                intensity_mode=str(getattr(self.args, "pcla_intensity_mode", "headroom")),
                 seed=int(getattr(self.args, "pcla_perturb_seed", 1234)),
             ),
         )
@@ -3627,7 +4575,14 @@ class CarlaLidarViewer:
                 _src = f"piano ridotto ({len(self._pcla_route_locations)} wp)"
             else:
                 _src = f"route autorata ({len(self._pcla_route_locations)} wp)"
-            print(f"[toolkit] scarto dalla route misurato su: {_src}", flush=True)
+            self._pcla_route_len_cached = None
+            _rl = self._pcla_route_locations
+            if len(_rl) >= 2:
+                self._pcla_route_len_cached = float(sum(
+                    math.hypot(b.x - a.x, b.y - a.y) for a, b in zip(_rl, _rl[1:])))
+            print(f"[toolkit] scarto dalla route misurato su: {_src}"
+                  + (f", lunghezza {self._pcla_route_len_cached:.0f} m"
+                     if self._pcla_route_len_cached else ""), flush=True)
 
             pts = world_plan[:10]
             print(f"[toolkit] PCLA route world coords (first {len(pts)} of {len(world_plan)} wps):", flush=True)
@@ -3764,10 +4719,15 @@ class CarlaLidarViewer:
             "hazard_obstacle_x": obstacle_pos[0],
             "hazard_obstacle_y": obstacle_pos[1],
             "hazard_obstacle_z": obstacle_pos[2],
-            "global_mean_ratio": (self._pcla_session.last_drop_stats.get("global_mean_ratio")
-                                   if self._pcla_session is not None else float("nan")),
+            # getattr, not the attribute: the session is created late, so any
+            # failure before that point reaches destroy() with the attribute
+            # absent and an AttributeError here would replace the real error
+            # with a useless one.
+            "global_mean_ratio": (_sess.last_drop_stats.get("global_mean_ratio")
+                                   if (_sess := getattr(self, "_pcla_session", None))
+                                   is not None else float("nan")),
             "material_point_counts_json": (self._pcla_session.last_drop_stats.get("material_point_counts_json", "")
-                                            if self._pcla_session is not None else ""),
+                                            if getattr(self, "_pcla_session", None) is not None else ""),
         }
         summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
@@ -3873,6 +4833,31 @@ class CarlaLidarViewer:
             )
         return control
 
+    def _init_open_loop_matsense(self):
+        """Create the sensor operator without starting a driving agent."""
+        scripts_dir = str(Path(__file__).resolve().parent)
+        if scripts_dir not in sys.path:
+            sys.path.insert(0, scripts_dir)
+        import matsense_closedloop as _mcl
+        from matsense_closedloop import ClosedLoopSession, PerturbConfig
+        requested = str(getattr(self.args, "profile_name", "") or "")
+        applied = _mcl.apply_profile(requested or None)
+        if requested and applied != requested:
+            raise RuntimeError(f"profile mismatch: asked for {requested!r}, applied {applied!r}")
+        arm = str(getattr(self.args, "open_loop_arm", "matsense") or "matsense")
+        self._pcla_session = ClosedLoopSession(
+            self.vehicle, self.world, weather=self.args.weather, mode=arm,
+            cfg=PerturbConfig(
+                dropout_gain=float(getattr(self.args, "pcla_dropout_gain", 0.4)),
+                jitter_gain=float(getattr(self.args, "pcla_jitter_gain", 0.10)),
+                apply_intensity=not bool(getattr(self.args, "pcla_no_intensity", False)),
+                intensity_mode=str(getattr(self.args, "pcla_intensity_mode", "headroom")),
+                seed=int(getattr(self.args, "pcla_perturb_seed", 1234)),
+            ),
+        )
+        print(f"[toolkit] open-loop session: arm={arm} profile={applied} "
+              f"seed={getattr(self.args, 'pcla_perturb_seed', 1234)}", flush=True)
+
     def run(self):
         print("[toolkit] run: setup_pygame", flush=True)
         self.setup_pygame()
@@ -3900,6 +4885,9 @@ class CarlaLidarViewer:
         if getattr(self.args, 'pcla_agent', ''):
             print("[toolkit] run: initialising PCLA agent …", flush=True)
             self._init_pcla()
+        elif getattr(self.args, "open_loop_matsense", False):
+            print("[toolkit] run: initialising standalone MatSense session …", flush=True)
+            self._init_open_loop_matsense()
         print("[toolkit] run: entering main loop", flush=True)
         loop_count = 0
 
@@ -3924,11 +4912,13 @@ class CarlaLidarViewer:
 
             if self._pcla is not None:
                 self._update_dynamic_actors()
+                self._update_walkers()
                 if loop_count < 3:
                     print(f"[toolkit] before_tick loop={loop_count}", flush=True)
                 _t0 = time.perf_counter()
                 target_frame = self.world.tick()
                 self._phase_add("tick", time.perf_counter() - _t0)
+                self._tick_srunner()
                 if loop_count < 3:
                     print(f"[toolkit] after_tick loop={loop_count} frame={target_frame}", flush=True)
                 try:
@@ -3956,18 +4946,28 @@ class CarlaLidarViewer:
                     return
             elif self.trajectory_poses:
                 self.follow_trajectory_step()
+                if getattr(self, "_traj_exhausted", False) and \
+                        not bool(getattr(self.args, "keep_running_after_traj", False)):
+                    if hasattr(self, '_pcla_logger') and self._pcla_logger is not None:
+                        self._pcla_logger.close()
+                        self._pcla_logger = None
+                    return
                 self._update_dynamic_actors()
+                self._update_walkers()
                 if loop_count < 3:
                     print(f"[toolkit] before_tick loop={loop_count}", flush=True)
                 target_frame = self.world.tick()
+                self._tick_srunner()
                 if loop_count < 3:
                     print(f"[toolkit] after_tick loop={loop_count} frame={target_frame}", flush=True)
             else:
                 self.manual_control()
                 self._update_dynamic_actors()
+                self._update_walkers()
                 if loop_count < 3:
                     print(f"[toolkit] before_tick loop={loop_count}", flush=True)
                 target_frame = self.world.tick()
+                self._tick_srunner()
                 if loop_count < 3:
                     print(f"[toolkit] after_tick loop={loop_count} frame={target_frame}", flush=True)
             loop_count += 1
@@ -3992,6 +4992,20 @@ class CarlaLidarViewer:
                 rx, ry, lx, ly, margin = self._pcla_route_end
                 loc = self.vehicle.get_location()
                 past = rx * (loc.x - lx) + ry * (loc.y - ly)
+                # The half-plane alone is not enough. Its direction is the chord
+                # from the route's first waypoint to its last, so on a route that
+                # turns, the region "beyond the end" reaches back across the map
+                # and the ego enters it while still far from the finish. On the
+                # official 529 m Leaderboard route it fires at 124 m and the run
+                # is recorded as completed having driven a fifth of it. Arc
+                # length along the authored route settles it; the short, straight
+                # campaign routes satisfy both at the same place, so their
+                # behaviour is unchanged.
+                _prog = self._pcla_route_progress_m(loc)
+                _len = getattr(self, "_pcla_route_len_cached", None)
+                if past > margin and _len and math.isfinite(_prog) \
+                        and _prog < _len - 10.0:
+                    past = -1.0        # beyond the chord but not along the road
                 if past > margin:
                     print(
                         f"[toolkit] PCLA route end reached (past={past:.1f} m) "
@@ -4006,7 +5020,21 @@ class CarlaLidarViewer:
 
             route_dev_threshold = float(getattr(self.args, "pcla_route_dev_threshold", 0.0))
             if self._pcla is not None and route_dev_threshold > 0.0 and self.vehicle is not None and self.vehicle.is_alive:
-                route_dev_now = self._pcla_route_deviation_m(self.vehicle.get_location())
+                _loc_dev = self.vehicle.get_location()
+                route_dev_now = self._pcla_route_deviation_m(_loc_dev)
+                # Deviation is distance to the nearest point of the route
+                # polyline, and past the final waypoint that point stops moving:
+                # a vehicle continuing straight through the finish accumulates
+                # "deviation" that is entirely longitudinal. Every run of one
+                # campaign arm ended labelled route_deviation at 5.03 m while its
+                # lateral offset was 0.04 m - a completed route recorded as a
+                # departure. Once the ego has covered the route, the end-of-route
+                # condition is the one that applies, so this one stands down.
+                _len_dev = getattr(self, "_pcla_route_len_cached", None)
+                if _len_dev:
+                    _prog_dev = self._pcla_route_progress_m(_loc_dev)
+                    if math.isfinite(_prog_dev) and _prog_dev >= _len_dev - 2.0:
+                        route_dev_now = 0.0
                 if math.isfinite(route_dev_now) and route_dev_now > route_dev_threshold:
                     print(
                         f"[toolkit] PCLA route deviation termination: route_dev={route_dev_now:.2f}m "
@@ -4140,11 +5168,23 @@ class CarlaLidarViewer:
                         global_mean_ratio=round(float(_drop.get("global_mean_ratio", float("nan"))), 6)
                         if math.isfinite(float(_drop.get("global_mean_ratio", float("nan")))) else "",
                         material_point_counts_json=_drop.get("material_point_counts_json", ""),
+                        # What the operator applied, alongside profile_name,
+                        # which is only what was asked for. The two differed for
+                        # every run of campaign 19 and nothing said so.
+                        operator_profile=_drop.get("operator_profile", ""),
+                        intensity_mode=_drop.get("intensity_mode", ""),
                         carla_client_version=self._carla_client_version,
                         carla_server_version=self._carla_server_version,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Swallowing this silently is how two new columns came out
+                    # empty for a whole probe run without anyone noticing. Say
+                    # it once: a per-tick message would flood the log.
+                    if not getattr(self, "_clog_error_reported", False):
+                        self._clog_error_reported = True
+                        print(f"[toolkit] clog: riga non scritta ({type(exc).__name__}: "
+                              f"{exc}). Le successive non verranno segnalate.",
+                              flush=True)
             self._phase_add("clog", time.perf_counter() - _t0)
 
             _t0 = time.perf_counter()
@@ -4286,6 +5326,14 @@ def build_argparser():
                     help="How to follow --traj-json: vehicle control or exact teleport")
     ap.add_argument("--control-smoothing", type=float, default=0.30,
                     help="Blend factor for successive control commands when follow-mode=control")
+    ap.add_argument("--walkers-json", type=str, default=None,
+                    help="pedestrians for the scenario. Same trigger-and-segments "
+                         "shape as --dynamic-json, but driven with WalkerControl "
+                         "so the skeleton animates: a pedestrian slid along by "
+                         "target velocity presents the LiDAR a rigid shape.")
+    ap.add_argument("--walker-z-offset", type=float, default=0.6,
+                    help="spawn height above the ground point, so a walker does "
+                         "not spawn inside the road surface")
     ap.add_argument("--parked-json", type=str, default=None,
                     help="Optional vehicle_data JSON with spawn_positions for parked cars")
     ap.add_argument("--parked-shift-x", type=float, default=0.0,
@@ -4296,10 +5344,65 @@ def build_argparser():
                     help="Apply this Z shift to every parked start/end position after loading the JSON")
     ap.add_argument("--parked-scale", type=float, default=1.0,
                     help="Apply this scale to parked vehicle XYZ before shifts")
+    ap.add_argument("--parked-settle-ticks", type=int, default=15,
+                    help="frames of physics given to parked vehicles after "
+                         "spawning, so the spawn lift comes off and the wheels "
+                         "reach the road. Zero keeps the previous behaviour.")
     ap.add_argument("--parked-z-offset", type=float, default=0.5,
-                    help="Vertical offset used for parked vehicles loaded from --parked-json")
+                    help="Initial lift used while spawning parked vehicles before physical settling")
+    ap.add_argument("--startup-diagnostics-json", type=str, default="",
+                    help="where the startup state is recorded; defaults to "
+                         "/tmp/matsense_last_startup.json so a run that went "
+                         "wrong can be diagnosed afterwards")
+    ap.add_argument("--traj-spawn-lift", type=float, default=0.3,
+                    help="vertical lift used only for the ego's spawn attempt "
+                         "along the trajectory. Without it every pose is "
+                         "refused for intersecting the road and the run falls "
+                         "back to an arbitrary map spawn point.")
+    ap.add_argument("--validate-against-map",
+                    choices=["abort", "warn", "off"], default="abort",
+                    help="check the trajectory and the parked layout against "
+                         "the loaded map's road network before spawning. A file "
+                         "in the wrong frame is self-consistent and only the map "
+                         "can catch it.")
+    ap.add_argument("--validate-max-median-m", type=float, default=8.0,
+                    help="median distance from the nearest driving lane above "
+                         "which the input is judged not to belong to this map")
+    ap.add_argument("--parked-avoid-ego-lane", action="store_true",
+                    help="move aside only the parked vehicles whose lateral "
+                         "distance from the driven trajectory is below "
+                         "--parked-clearance-m, keeping the side they were "
+                         "recovered on. The layout on disk is not modified.")
+    ap.add_argument("--parked-clearance-m", type=float, default=2.5,
+                    help="lateral clearance a parked vehicle must leave the "
+                         "trajectory. Half the ego plus half a parked car is "
+                         "1.85 m; the rest is the agent's own tracking error.")
+    ap.add_argument("--parked-report-json", type=str, default="",
+                    help="where the validation report is written; defaults to "
+                         "<dataset-root>/parked_reports/<scenario>_parked.json")
     ap.add_argument("--parked-limit", type=int, default=0,
                     help="Spawn only the first N parked vehicles from --parked-json; 0 means all")
+    ap.add_argument("--srunner-scenario", type=str, default="",
+                    help="run an official ScenarioRunner hazard instead of a "
+                         "hand-built --dynamic-json one. The catalogue entries "
+                         "matching this campaign are parking_crossing_pedestrian, "
+                         "invading_turn, static_cut_in, no_signal_junction_crossing "
+                         "and follow_leading_vehicle. These carry the NHTSA "
+                         "provenance the hand-built copies lack, but they are "
+                         "parameterised by distance rather than by warning time, "
+                         "so they still need the same calibration.")
+    ap.add_argument("--srunner-route", type=str, default="",
+                    help="JSON written by tools/import_leaderboard_route.py, "
+                         "carrying every scenario of an official Leaderboard "
+                         "route with its own trigger point and parameters. Use "
+                         "with the matching --pcla-route; mutually exclusive "
+                         "with --srunner-scenario.")
+    ap.add_argument("--srunner-param", action="append", default=[],
+                    metavar="KEY=VALUE",
+                    help="scenario parameter, repeatable, e.g. --srunner-param "
+                         "distance=12. Names come from each scenario's own "
+                         "get_value_parameter calls; an unknown name is ignored "
+                         "silently by ScenarioRunner and falls back to default.")
     ap.add_argument("--dynamic-json", type=str, default=None,
                     help="Optional JSON with trigger-based moving vehicle actors")
     ap.add_argument("--dynamic-shift-x", type=float, default=0.0,
@@ -4315,7 +5418,55 @@ def build_argparser():
     ap.add_argument("--seed", type=int, default=42,
                     help="Deterministic seed for parked vehicle blueprint selection")
     ap.add_argument("--weather", choices=["nominal", "rain", "snow"], default="nominal")
-    ap.add_argument("--mode", choices=["intensity", "global", "material", CAMERA_TRIPLE_MODE], default="global")
+    ap.add_argument("--mode", choices=["intensity", "global", "material", "shuffled",
+                                       "level", CAMERA_TRIPLE_MODE], default="global")
+    # LMDrive's rig: four views with its own positions and fields
+    # of view, saved next to the clouds. It is needed because its backbone is
+    # a fusion model and cannot be queried without its cameras; our recordings
+    # have a single view, from LAV's rig.
+    ap.add_argument("--lmdrive-rig", action="store_true",
+                    help="also record the four views LMDrive's backbone "
+                         "requires, under lmdrive_rgb/")
+    ap.add_argument("--pcla-jitter-gain", type=float, default=0.10,
+                    help="Range jitter applied to strongly attenuated returns. "
+                         "Set to 0 to leave geometry alone and isolate the other terms.")
+    ap.add_argument("--pcla-no-intensity", action="store_true",
+                    help="Apply the material-dependent dropout and jitter but NOT the "
+                         "intensity rescaling, so the two halves of the operator can be "
+                         "told apart. Without this the campaign cannot say whether the "
+                         "trajectory moves because returns went missing or because the "
+                         "calibrated coefficients changed what the network reads.")
+    ap.add_argument("--pcla-intensity-mode", choices=["headroom", "clip"],
+                    default="headroom",
+                    help="How the calibrated response is mapped into [0,1]. "
+                         "'headroom' scales by the profile's largest coefficient so "
+                         "nothing saturates and every measured ratio survives; the "
+                         "uniform baseline then receives the same per-frame mean, so "
+                         "the pair differs in material structure alone. 'clip' is the "
+                         "pre-correction behaviour and reproduces campaigns up to 19: "
+                         "it normalised to a mean of one and truncated, which pinned a "
+                         "quarter of returns at 1.0 and delivered 1.47 of a measured "
+                         "2.50 facade-to-asphalt ratio.")
+    ap.add_argument("--ambient-walkers", type=int, default=0,
+                    help="background pedestrians routed by CARLA's walker AI over "
+                         "the map's navigation mesh. They walk; they do not follow "
+                         "a scripted line. The scenario's own hazard pedestrian "
+                         "stays scripted, because a conformance test needs it to "
+                         "arrive at a defined moment.")
+    ap.add_argument("--ambient-walker-speed", type=float, default=1.4,
+                    help="metres per second, about 5 km/h")
+    ap.add_argument("--ambient-keep-clear-m", type=float, default=8.0)
+    ap.add_argument("--tm-traffic", type=int, default=0,
+                    help="background vehicles driven by CARLA's Traffic Manager. "
+                         "They follow lanes, obey lights and brake behind each "
+                         "other, which the scenario JSON's open-loop actors "
+                         "cannot. 0 disables it, which is what every campaign so "
+                         "far ran with.")
+    ap.add_argument("--tm-keep-clear-m", type=float, default=12.0,
+                    help="no traffic spawns closer than this to the ego, so the "
+                         "run does not begin with a vehicle on top of it")
+    ap.add_argument("--tm-speed-delta-pct", type=float, default=0.0,
+                    help="Traffic Manager speed offset; 0 means the posted limit")
     ap.add_argument("--pcla-dropout-gain", type=float, default=0.4,
                     help="Matsense dropout_gain passed to PerturbConfig (default 0.4 = calibrated)")
     ap.add_argument("--pcla-perturb-seed", type=int, default=1234,
@@ -4339,8 +5490,15 @@ def build_argparser():
                     help="Brake threshold used to detect the first brake application in summaries.")
     ap.add_argument("--hazard-sensor-range-m", type=float, default=80.0,
                     help="Distance threshold used to declare the hazard obstacle in range.")
-    ap.add_argument("--hazard-obstacle-source", choices=["none", "first_parked", "first_dynamic"], default="none",
-                    help="Select which spawned actor should be tracked as the hazard obstacle.")
+    ap.add_argument("--hazard-obstacle-source",
+                    choices=["none", "first_parked", "first_dynamic", "first_walker"],
+                    default="none",
+                    help="Which spawned actor is tracked as the hazard, so the "
+                         "clog carries its distance. Without it obstacle_distance_m "
+                         "is empty and there is no way afterwards to say when the "
+                         "agent reacted to the hazard rather than to something "
+                         "else: that gap is why the invading-bend runs could not "
+                         "be attributed without a separate reconstruction.")
     ap.add_argument("--condition-type", type=str, default="scenario",
                     help="Logical experiment condition label written to per-run outputs.")
     ap.add_argument("--replicate-index", type=int, default=0,
@@ -4426,6 +5584,18 @@ def build_argparser():
                     help="Wait for the exact RGB/semantic/LiDAR frame after each world tick before saving the dataset")
     ap.add_argument("--strict-sync-timeout", type=float, default=0.5,
                     help="Maximum wait time in seconds for the exact sensor frame when strict-sync is enabled")
+    ap.add_argument("--open-loop-matsense", action="store_true",
+                    help="Apply MatSense to synchronized LiDAR clouds without starting a PCLA driving agent.")
+    ap.add_argument("--keep-running-after-traj", action="store_true",
+                    help="Keep ticking after a teleported replay runs out of poses. "
+                         "Off by default: the ego is parked on the last pose and "
+                         "every further frame is the same static view.")
+    ap.add_argument("--open-loop-arm", type=str, default="matsense",
+                    choices=["standard", "global", "matsense", "pertov"],
+                    help="Which sensing arm the open-loop operator runs. --mode is "
+                         "the display colormap and does NOT select this: three runs "
+                         "that differ only in --mode carry the same operator and "
+                         "cannot be compared as arms.")
     ap.add_argument("--pcla-agent", type=str, default="",
                     help="PCLA agent name (e.g. 'tfv4_l6_0'). When set, PCLA drives instead of autopilot/manual.")
     ap.add_argument("--pcla-route", type=str, default="",
@@ -4471,8 +5641,14 @@ def main():
     except KeyboardInterrupt:
         pass
     except Exception:
+        # Printed here, not left to the interpreter. The finally below ends the
+        # process with os._exit, which skips the traceback Python would normally
+        # write on the way out - so a run that died on a real error looked
+        # exactly like one that ended quietly, and the only clue was the exit
+        # code. Every failure diagnosed by guesswork in this harness was this.
         exit_code = 1
-        raise
+        traceback.print_exc()
+        sys.stderr.flush()
     finally:
         app.destroy()
         if os.environ.get("MATSENSE_FORCE_EXIT_ON_SHUTDOWN", "1").strip() != "0":

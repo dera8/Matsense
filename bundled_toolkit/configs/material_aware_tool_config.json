@@ -1,5 +1,5 @@
 {
-  "default_profile": "realbag_empirical_v1",
+  "default_profile": "realbag_empirical_v4",
   "profiles": {
     "carla_default": {
       "default_material": "unknown",
@@ -96,6 +96,14 @@
         "asphalt",
         "building",
         "sidewalk"
+      ],
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "sidewalk",
+        "unknown",
+        "vegetation"
       ]
     },
     "realbag_empirical_v1": {
@@ -194,7 +202,15 @@
         "building",
         "sidewalk"
       ],
-      "notes": "Empirical v1 profile grounded on same-road nominal and rain real-bag pseudo-reflectance priors. Asphalt is the strongest anchor; building is facade-dependent; car and vegetation remain lower-confidence classes."
+      "notes": "Empirical v1 profile grounded on same-road nominal and rain real-bag pseudo-reflectance priors. Asphalt is the strongest anchor; building is facade-dependent; car and vegetation remain lower-confidence classes.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "sidewalk",
+        "unknown",
+        "vegetation"
+      ]
     },
     "realbag_empirical_v2": {
       "default_material": "unknown",
@@ -292,7 +308,13 @@
         "building",
         "sidewalk"
       ],
-      "notes": "Rebuilt from pseudoreflectance_v3c (anchor range model fitted on [2,60] m, v3 hierarchical SAM3 masks). Seven measured classes aggregated to the four runtime materials by point count. sidewalk, unknown and the snow ratios are carried over from realbag_empirical_v1 and are not measured. Weather ratios normalised at R0=40 m; they are strongly sensitive to this choice (see notes) while nominal_base is not."
+      "notes": "Rebuilt from pseudoreflectance_v3c (anchor range model fitted on [2,60] m, v3 hierarchical SAM3 masks). Seven measured classes aggregated to the four runtime materials by point count. sidewalk, unknown and the snow ratios are carried over from realbag_empirical_v1 and are not measured. Weather ratios normalised at R0=40 m; they are strongly sensitive to this choice (see notes) while nominal_base is not.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "vegetation"
+      ]
     },
     "realbag_empirical_v2_r10": {
       "default_material": "unknown",
@@ -390,7 +412,13 @@
         "building",
         "sidewalk"
       ],
-      "notes": "Rebuilt from pseudoreflectance_v3c (anchor range model fitted on [2,60] m, v3 hierarchical SAM3 masks). Seven measured classes aggregated to the four runtime materials by point count. sidewalk, unknown and the snow ratios are carried over from realbag_empirical_v1 and are not measured. Weather ratios normalised at R0=10 m; they are strongly sensitive to this choice (see notes) while nominal_base is not."
+      "notes": "Rebuilt from pseudoreflectance_v3c (anchor range model fitted on [2,60] m, v3 hierarchical SAM3 masks). Seven measured classes aggregated to the four runtime materials by point count. sidewalk, unknown and the snow ratios are carried over from realbag_empirical_v1 and are not measured. Weather ratios normalised at R0=10 m; they are strongly sensitive to this choice (see notes) while nominal_base is not.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "vegetation"
+      ]
     },
     "realbag_empirical_v3": {
       "default_material": "unknown",
@@ -488,7 +516,853 @@
         "building",
         "sidewalk"
       ],
-      "notes": "Built by tools/calibrate_mci.py from pseudoreflectance_v3c. I_MCI = kappa*rho after Laasch et al. 2025 - not a reflectance. g(R) is SHARED across bags (a sensor property, so g(R0) cancels from every cross-bag ratio and alpha is R0-independent by construction), estimated on equal-population bins with bin means and an isotonic fit. Band 20-60 m: below 20 the asphalt anchor is quantised onto 0 and 1, beyond 60 87-97% of points of every class read exactly 63. sidewalk, unknown and the snow ratios are carried over and not measured."
+      "notes": "Built by tools/calibrate_mci.py from pseudoreflectance_v3c. I_MCI = kappa*rho after Laasch et al. 2025 - not a reflectance. g(R) is SHARED across bags (a sensor property, so g(R0) cancels from every cross-bag ratio and alpha is R0-independent by construction), estimated on equal-population bins with bin means and an isotonic fit. Band 20-60 m: below 20 the asphalt anchor is quantised onto 0 and 1, beyond 60 87-97% of points of every class read exactly 63. sidewalk, unknown and the snow ratios are carried over and not measured.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "vegetation"
+      ]
+    },
+    "realbag_empirical_v4": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 0.5472,
+        "building": 1.0,
+        "car": 0.7113,
+        "sidewalk": 0.6529,
+        "vegetation": 0.8335,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 0.8876,
+          "building": 0.9774,
+          "car": 0.9179,
+          "sidewalk": 0.9303,
+          "vegetation": 0.9713,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 0.493,
+          "building": 0.28,
+          "car": 1.538,
+          "sidewalk": 0.082,
+          "vegetation": 0.652,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Built by tools/calibrate_mci.py from pseudoreflectance_v4, twelve recordings (v3's eleven plus 2026-06-07-17-13-40, added because rain on a different street rested on two bags and is the arm that transfers worst; chosen by comparing odometry, 97 per cent of its route is road the other two do not cover). I_MCI = kappa*rho after Laasch et al. 2025 - not a reflectance. g(R) SHARED across bags, equal-population bins, bin means, isotonic fit, band 20-60 m. FIVE MEASURED CLASSES. sidewalk is measured here for the first time: v3 carried 0.30 over from v1, 0.55 times asphalt, and the measurement gives 0.6529, 1.19 times asphalt - a factor of two, on 16.8 per cent of the returns the agent receives. Segmenting it needed a second prompt set: the first returned the carriageway, because 'pavement' means the road surface in American usage. unknown is NOT measured and is declared so in measured_materials: the operator leaves those returns as the simulator produced them. A pedestrian class was attempted and abandoned - prompted segmentation put a person on 1452 frames at 0.03 to 0.14 per cent of the image, and an independent detector confirmed 9 per cent of them, which is not agreement enough to support a coefficient. Snow ratios are carried over and unmeasured.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "sidewalk",
+        "vegetation"
+      ]
+    },
+    "shuffled_matched_v4": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 0.8335,
+        "building": 0.5472,
+        "car": 0.6529,
+        "sidewalk": 0.7113,
+        "vegetation": 1.0,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 0.9713,
+          "building": 0.8876,
+          "car": 0.9303,
+          "sidewalk": 0.9179,
+          "vegetation": 0.9774,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 0.652,
+          "building": 0.493,
+          "car": 0.082,
+          "sidewalk": 1.538,
+          "vegetation": 0.28,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Permutation control, derived from realbag_empirical_v4 by build_shuffled_profiles.py. Every measured class is given another measured class's coefficients (asphalt<-vegetation, sidewalk<-car, car<-sidewalk, vegetation<-building, building<-asphalt); no class keeps its own. The multiset of coefficients is unchanged, so the operator applies exactly the numbers it was calibrated to and only the assignment is wrong. Mean absolute shift from the calibration 0.2045; intensity-weighted mean factor 0.7949 against the operator's 0.7950. NOT a sensor model: it exists to be worse.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "sidewalk",
+        "vegetation"
+      ]
+    },
+    "shuffled_extreme_v4": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 0.7113,
+        "building": 0.6529,
+        "car": 1.0,
+        "sidewalk": 0.8335,
+        "vegetation": 0.5472,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 0.9179,
+          "building": 0.9303,
+          "car": 0.9774,
+          "sidewalk": 0.9713,
+          "vegetation": 0.8876,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 1.538,
+          "building": 0.082,
+          "car": 0.28,
+          "sidewalk": 0.652,
+          "vegetation": 0.493,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Permutation control, derived from realbag_empirical_v4 by build_shuffled_profiles.py. Every measured class is given another measured class's coefficients (asphalt<-car, sidewalk<-vegetation, car<-building, vegetation<-asphalt, building<-sidewalk); no class keeps its own. The multiset of coefficients is unchanged, so the operator applies exactly the numbers it was calibrated to and only the assignment is wrong. Mean absolute shift from the calibration 0.2534; intensity-weighted mean factor 0.8095 against the operator's 0.7950. NOT a sensor model: it exists to be worse.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "sidewalk",
+        "vegetation"
+      ]
+    },
+    "swap_asphalt_v4": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 1.0,
+        "building": 1.0,
+        "car": 0.7113,
+        "sidewalk": 0.6529,
+        "vegetation": 0.8335,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 0.9774,
+          "building": 0.9774,
+          "car": 0.9179,
+          "sidewalk": 0.9303,
+          "vegetation": 0.9713,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 0.28,
+          "building": 0.28,
+          "car": 1.538,
+          "sidewalk": 0.082,
+          "vegetation": 0.652,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Single-class control from realbag_empirical_v4: 'asphalt' is given the coefficients of 'building' and every other class keeps its calibrated value. Coefficient shift +0.4528 on a class holding 7.2 per cent of the in-band intensity and 34.1 per cent of the whole cloud; intensity-weighted mean factor 0.9492 against the calibrated 0.7950. NOT a sensor model: it exists to be wrong in one place.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "sidewalk",
+        "vegetation"
+      ]
+    },
+    "swap_sidewalk_v4": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 0.5472,
+        "building": 1.0,
+        "car": 0.7113,
+        "sidewalk": 1.0,
+        "vegetation": 0.8335,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 0.8876,
+          "building": 0.9774,
+          "car": 0.9179,
+          "sidewalk": 0.9774,
+          "vegetation": 0.9713,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 0.493,
+          "building": 0.28,
+          "car": 1.538,
+          "sidewalk": 0.28,
+          "vegetation": 0.652,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Single-class control from realbag_empirical_v4: 'sidewalk' is given the coefficients of 'building' and every other class keeps its calibrated value. Coefficient shift +0.3471 on a class holding 1.9 per cent of the in-band intensity and 5.3 per cent of the whole cloud; intensity-weighted mean factor 0.8135 against the calibrated 0.7950. NOT a sensor model: it exists to be wrong in one place.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "sidewalk",
+        "vegetation"
+      ]
+    },
+    "swap_car_v4": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 0.5472,
+        "building": 1.0,
+        "car": 1.0,
+        "sidewalk": 0.6529,
+        "vegetation": 0.8335,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 0.8876,
+          "building": 0.9774,
+          "car": 0.9774,
+          "sidewalk": 0.9303,
+          "vegetation": 0.9713,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 0.493,
+          "building": 0.28,
+          "car": 0.28,
+          "sidewalk": 0.082,
+          "vegetation": 0.652,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Single-class control from realbag_empirical_v4: 'car' is given the coefficients of 'building' and every other class keeps its calibrated value. Coefficient shift +0.2887 on a class holding 3.5 per cent of the in-band intensity and 10.1 per cent of the whole cloud; intensity-weighted mean factor 0.8242 against the calibrated 0.7950. NOT a sensor model: it exists to be wrong in one place.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "sidewalk",
+        "vegetation"
+      ]
+    },
+    "swap_vegetation_v4": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 0.5472,
+        "building": 1.0,
+        "car": 0.7113,
+        "sidewalk": 0.6529,
+        "vegetation": 0.5472,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 0.8876,
+          "building": 0.9774,
+          "car": 0.9179,
+          "sidewalk": 0.9303,
+          "vegetation": 0.8876,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 0.493,
+          "building": 0.28,
+          "car": 1.538,
+          "sidewalk": 0.082,
+          "vegetation": 0.493,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Single-class control from realbag_empirical_v4: 'vegetation' is given the coefficients of 'asphalt' and every other class keeps its calibrated value. Coefficient shift -0.2863 on a class holding 1.6 per cent of the in-band intensity and 1.8 per cent of the whole cloud; intensity-weighted mean factor 0.7898 against the calibrated 0.7950. NOT a sensor model: it exists to be wrong in one place.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "sidewalk",
+        "vegetation"
+      ]
+    },
+    "swap_building_v4": {
+      "default_material": "unknown",
+      "display_mode_sequence": [
+        "intensity",
+        "global",
+        "material"
+      ],
+      "semantic_to_material": {
+        "1": "asphalt",
+        "2": "sidewalk",
+        "3": "building",
+        "4": "building",
+        "9": "vegetation",
+        "14": "car",
+        "15": "car",
+        "16": "car",
+        "18": "car",
+        "19": "car",
+        "24": "asphalt"
+      },
+      "display_colors": {
+        "asphalt": [
+          255,
+          255,
+          255
+        ],
+        "concrete": [
+          255,
+          221,
+          0
+        ],
+        "sidewalk": [
+          255,
+          221,
+          0
+        ],
+        "building": [
+          255,
+          128,
+          0
+        ],
+        "vegetation": [
+          0,
+          255,
+          80
+        ],
+        "car": [
+          255,
+          0,
+          160
+        ],
+        "unknown": [
+          80,
+          80,
+          80
+        ]
+      },
+      "nominal_base": {
+        "asphalt": 0.5472,
+        "building": 0.5472,
+        "car": 0.7113,
+        "sidewalk": 0.6529,
+        "vegetation": 0.8335,
+        "unknown": 0.4
+      },
+      "weather_ratio": {
+        "nominal": {
+          "asphalt": 1.0,
+          "building": 1.0,
+          "car": 1.0,
+          "sidewalk": 1.0,
+          "vegetation": 1.0,
+          "unknown": 1.0
+        },
+        "rain": {
+          "asphalt": 0.8876,
+          "building": 0.8876,
+          "car": 0.9179,
+          "sidewalk": 0.9303,
+          "vegetation": 0.9713,
+          "unknown": 0.7
+        },
+        "snow": {
+          "asphalt": 0.493,
+          "building": 0.493,
+          "car": 1.538,
+          "sidewalk": 0.082,
+          "vegetation": 0.652,
+          "unknown": 0.7
+        }
+      },
+      "planar_materials": [
+        "asphalt",
+        "building",
+        "sidewalk"
+      ],
+      "notes": "Single-class control from realbag_empirical_v4: 'building' is given the coefficients of 'asphalt' and every other class keeps its calibrated value. Coefficient shift -0.4528 on a class holding 85.8 per cent of the in-band intensity and 21.6 per cent of the whole cloud; intensity-weighted mean factor 0.7824 against the calibrated 0.7950. NOT a sensor model: it exists to be wrong in one place.",
+      "measured_materials": [
+        "asphalt",
+        "building",
+        "car",
+        "sidewalk",
+        "vegetation"
+      ]
     }
   },
   "launch_presets": {

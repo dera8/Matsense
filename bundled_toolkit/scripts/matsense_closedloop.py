@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import math
 import threading
 import time as _time
@@ -89,6 +90,11 @@ _profile_name, _profile = get_profile(_cfg)
 _profile = normalize_profile(_profile)
 
 NOMINAL_BASE: dict[str, float] = dict(_profile["nominal_base"])
+# Which classes the calibration actually estimated. The rest carry a value
+# copied from an earlier profile, and until now nothing but a sentence in the
+# notes said so while the operator applied them like any other.
+MEASURED_MATERIALS: set[str] = set(
+    _profile.get("measured_materials") or _profile["nominal_base"])
 WEATHER_RATIO: dict[str, dict[str, float]] = dict(_profile["weather_ratio"])
 SEMANTIC_TO_MATERIAL: dict[int, str] = dict(_profile["semantic_to_material"])
 PLANAR_MATERIALS: set[str] = set(_profile["planar_materials"])
@@ -183,38 +189,99 @@ def _match_semantic_tags(
 # which compares the two implementations bit for bit.
 # ---------------------------------------------------------------------------
 
-_MATERIALS: list[str] = sorted(
-    set(SEMANTIC_TO_MATERIAL.values()) | set(NOMINAL_BASE) | {DEFAULT_MATERIAL}
-)
-_MAT_INDEX: dict[str, int] = {m: i for i, m in enumerate(_MATERIALS)}
-_MAT_ARRAY = np.array(_MATERIALS, dtype=object)
-_DEFAULT_CODE = _MAT_INDEX[DEFAULT_MATERIAL]
-
-# CARLA class ids are small; the table is indexed directly by tag. Anything
-# outside it, including the 0 that means "no partner found", maps to the
-# default material, which is what the dict .get(..., DEFAULT_MATERIAL) did.
 _MAX_TAG = 256
-_TAG_TO_CODE = np.full(_MAX_TAG, _DEFAULT_CODE, dtype=np.int32)
-_TAG_MAPPED = np.zeros(_MAX_TAG, dtype=bool)
-for _t, _m in SEMANTIC_TO_MATERIAL.items():
-    if 0 <= int(_t) < _MAX_TAG:
-        _TAG_TO_CODE[int(_t)] = _MAT_INDEX.get(str(_m), _DEFAULT_CODE)
-        _TAG_MAPPED[int(_t)] = True
 
-# float64, deliberately: the code these replace multiplied two Python floats
-# and rounded the product to float32 once. Keeping the tables in float64 and
-# casting after the multiply reproduces that rounding exactly; float32 tables
-# would round the operands first and can differ in the last bit, which is
-# enough to change a dropout draw and with it the experiment.
-_BASE_BY_CODE = np.array(
-    [NOMINAL_BASE.get(m, NOMINAL_BASE[DEFAULT_MATERIAL]) for m in _MATERIALS],
-    dtype=np.float64,
-)
-_RATIO_BY_CODE: dict[str, np.ndarray] = {
-    w: np.array([lut.get(m, lut.get(DEFAULT_MATERIAL, 1.0)) for m in _MATERIALS],
-                dtype=np.float64)
-    for w, lut in WEATHER_RATIO.items()
-}
+
+def _rebuild_tables() -> None:
+    """Derive every lookup array from the profile dictionaries above.
+
+    A function rather than module-level statements because the profile is
+    chosen on the command line, and until this was callable it could not be:
+    the recorder's `apply_material_profile` rebound ITS OWN globals, this
+    module kept the tables it had built at import from the config's
+    `default_profile`, and nothing connected the two. Campaigns therefore ran
+    on `realbag_empirical_v1` while every filename, log line and clog column
+    recorded `realbag_empirical_v3`. The recorded `global_mean_ratio` matches
+    v1 to six decimals, which is how it was found.
+    """
+    global _MATERIALS, _MAT_INDEX, _MAT_ARRAY, _DEFAULT_CODE
+    global _TAG_TO_CODE, _TAG_MAPPED, _BASE_BY_CODE, _RATIO_BY_CODE, _MAX_BY_WEATHER
+    global _SUPPORTED_BY_CODE
+
+    _MATERIALS = sorted(
+        set(SEMANTIC_TO_MATERIAL.values()) | set(NOMINAL_BASE) | {DEFAULT_MATERIAL}
+    )
+    _MAT_INDEX = {m: i for i, m in enumerate(_MATERIALS)}
+    _MAT_ARRAY = np.array(_MATERIALS, dtype=object)
+    _DEFAULT_CODE = _MAT_INDEX[DEFAULT_MATERIAL]
+
+    # CARLA class ids are small; the table is indexed directly by tag. Anything
+    # outside it, including the 0 that means "no partner found", maps to the
+    # default material, which is what the dict .get(..., DEFAULT_MATERIAL) did.
+    _TAG_TO_CODE = np.full(_MAX_TAG, _DEFAULT_CODE, dtype=np.int32)
+    _TAG_MAPPED = np.zeros(_MAX_TAG, dtype=bool)
+    for t, m in SEMANTIC_TO_MATERIAL.items():
+        if 0 <= int(t) < _MAX_TAG:
+            _TAG_TO_CODE[int(t)] = _MAT_INDEX.get(str(m), _DEFAULT_CODE)
+            _TAG_MAPPED[int(t)] = True
+
+    # float64, deliberately: the code these replace multiplied two Python floats
+    # and rounded the product to float32 once. Keeping the tables in float64 and
+    # casting after the multiply reproduces that rounding exactly; float32 tables
+    # would round the operands first and can differ in the last bit, which is
+    # enough to change a dropout draw and with it the experiment.
+    _BASE_BY_CODE = np.array(
+        [NOMINAL_BASE.get(m, NOMINAL_BASE[DEFAULT_MATERIAL]) for m in _MATERIALS],
+        dtype=np.float64,
+    )
+    _RATIO_BY_CODE = {
+        w: np.array([lut.get(m, lut.get(DEFAULT_MATERIAL, 1.0)) for m in _MATERIALS],
+                    dtype=np.float64)
+        for w, lut in WEATHER_RATIO.items()
+    }
+    _SUPPORTED_BY_CODE = np.array([m in MEASURED_MATERIALS for m in _MATERIALS],
+                                  dtype=bool)
+    # the headroom mapping's fixed constant depends on the coefficients, so it
+    # has to be rebuilt with them
+    # over the SUPPORTED classes only: scaling by the largest coefficient in
+    # the table would let a carried-over value set the scale for the measured
+    # ones, which is the tail wagging the dog
+    _sup = _SUPPORTED_BY_CODE if _SUPPORTED_BY_CODE.any() else np.ones(
+        len(_MATERIALS), dtype=bool)
+    _MAX_BY_WEATHER = {w: float(np.max((_BASE_BY_CODE * tab)[_sup]))
+                       for w, tab in _RATIO_BY_CODE.items()}
+
+
+def active_profile() -> str:
+    """Which profile the operator is actually applying, for anyone who asks."""
+    return _profile_name
+
+
+def apply_profile(name: str | None) -> str:
+    """Switch the operator to a named profile and rebuild every table.
+
+    Must be called before the first perturbation. Returns the profile name in
+    force, so the caller can record what was used rather than what was asked
+    for; those two differing without anyone noticing is exactly the failure
+    this function exists to prevent.
+    """
+    global _profile_name, _profile
+    global NOMINAL_BASE, WEATHER_RATIO, SEMANTIC_TO_MATERIAL
+    global PLANAR_MATERIALS, DEFAULT_MATERIAL
+
+    _profile_name, prof = get_profile(_cfg, name)
+    _profile = normalize_profile(prof)
+    NOMINAL_BASE = dict(_profile["nominal_base"])
+    WEATHER_RATIO = dict(_profile["weather_ratio"])
+    SEMANTIC_TO_MATERIAL = dict(_profile["semantic_to_material"])
+    PLANAR_MATERIALS = set(_profile["planar_materials"])
+    DEFAULT_MATERIAL = _profile["default_material"]
+    MEASURED_MATERIALS = set(_profile.get("measured_materials") or NOMINAL_BASE)
+    _rebuild_tables()
+    return _profile_name
+
+
+_rebuild_tables()
 
 
 def _ratio_table(weather: str) -> np.ndarray:
@@ -267,11 +334,48 @@ class PerturbConfig(NamedTuple):
     jitter_gain: float = 0.10    # range jitter std (m) for strongly attenuated points
     global_dropout: float = 0.0  # uniform dropout disabled for the 'global' baseline
     seed: int = 1234             # fix + log for determinism (crucial for RQ4)
+    # The operator does three separable things: it removes returns, it jitters
+    # the range of strongly attenuated ones, and it rescales intensity. Only the
+    # last is the calibrated response itself; the first two are geometry. Which
+    # of them moves the trajectory is a question the campaign cannot answer with
+    # all three on, so each can be switched off on its own.
+    apply_intensity: bool = True
+    # How the calibrated response is mapped into the [0, 1] range the agent
+    # expects. See `_contrast_factors` for what the two settings mean and why
+    # the default changed; 'clip' reproduces campaigns up to and including 19
+    # bit for bit and is kept for exactly that.
+    intensity_mode: str = "headroom"    # 'headroom' | 'clip'
+    # What happens to a class the calibration never measured. See
+    # _supported_mask: 'identity' leaves those returns exactly as the simulator
+    # produced them, 'fallback' applies the profile's carried-over coefficient
+    # and reproduces every campaign up to this point.
+    unsupported_policy: str = "identity"    # 'identity' | 'fallback'
+    # Range ladder the 'shuffled' control permutes within. Five metres out to
+    # 60, then one open bin: fine enough that a bin holds a narrow slice of
+    # range, wide enough that a bin still holds several classes to swap between.
+    # Beyond 60 m nearly every class reads the saturation constant, so the tail
+    # is one bin rather than a row of near-empty ones.
+    shuffle_bin_edges: tuple = tuple(range(5, 61, 5))
 
 
 # ---------------------------------------------------------------------------
 # Core perturbation — the single function injected into PCLA
 # ---------------------------------------------------------------------------
+
+# Per-frame coverage of the shuffled control, appended as frames go by so a run
+# can report what fraction of the cloud its control actually reached.
+_SHUFFLE_COVERAGE: list[float] = []
+
+
+def shuffle_coverage() -> dict:
+    """What the material-assignment control reached over this run, so far."""
+    if not _SHUFFLE_COVERAGE:
+        return {"frames": 0}
+    v = np.asarray(_SHUFFLE_COVERAGE)
+    return {"frames": int(v.size), "mean": float(v.mean()),
+            "median": float(np.median(v)), "min": float(v.min()),
+            "max": float(v.max())}
+
 
 def _dropout_probs(materials: np.ndarray, weather: str, cfg: PerturbConfig) -> np.ndarray:
     codes = _as_codes(materials)
@@ -311,6 +415,66 @@ def _intensity_factors(materials: np.ndarray, weather: str,
     return f
 
 
+# _MAX_BY_WEATHER, the largest beta*alpha the profile contains per weather, is
+# built in _rebuild_tables with the coefficients it depends on. Defining it here
+# instead would freeze it at the profile loaded at import, so a later
+# apply_profile() would rescale by a constant belonging to a different profile.
+
+
+def _supported_mask(codes: np.ndarray) -> np.ndarray:
+    """Which returns belong to a class the calibration actually measured.
+
+    Table 6 of the paper marks sidewalk and unknown as carried over from an
+    earlier profile, and its caption says they are not used by the experiments.
+    They are: on the agent's own cloud they are 16.8 and 7.4 per cent of the
+    returns, they were rescaled and dropped like any measured class, and they
+    entered the mean the renormalisation divides by, so they moved the measured
+    classes too. Applying a coefficient nobody estimated is not a small
+    approximation, it is an unattributable one.
+    """
+    return _SUPPORTED_BY_CODE[np.asarray(codes, dtype=np.intp)]
+
+
+def _contrast_factors(materials: np.ndarray, weather: str) -> np.ndarray:
+    """The calibrated response, scaled so the strongest material lands at 1.0.
+
+    The level-preserving form above divides by the point-weighted mean, which
+    puts the mean factor at one and therefore pushes the strongest materials
+    well above it: facades reach 2.0. CARLA's returns arrive nearly saturated,
+    89 per cent of them above 0.90, so those factors have nowhere to go and the
+    output was clipped. A quarter of returns pinned at exactly 1.0, and the
+    facade-to-asphalt ratio the agent actually received was 1.47 against the
+    2.50 that was measured: the operator delivered 59 per cent of its own
+    calibration and silently flattened the class with the strongest response.
+
+    Dividing by the profile's largest coefficient instead makes the strongest
+    material exactly 1.0 and every other one its measured fraction of that. No
+    product can exceed one, so nothing clips and every ratio survives intact.
+
+    What it costs is level: the mean factor is now well below one, so the cloud
+    is darker. That is not hidden and it is not left to fall on one arm only -
+    `matsense_perturb` gives the uniform baseline the same per-frame mean, so
+    the two differ in material structure and in nothing else. It also repairs a
+    defect in the design: under nominal conditions the old uniform baseline
+    scaled by exactly 1.0 and was bit-identical to the unmodified sensor, which
+    made half the campaign a comparison against one configuration counted twice.
+    """
+    codes = _as_codes(materials).astype(np.intp)
+    f = (_BASE_BY_CODE[codes] * _ratio_table(weather)[codes]).astype(np.float32)
+    k = _MAX_BY_WEATHER.get(weather, _MAX_BY_WEATHER.get("nominal", 1.0))
+    return f / np.float32(max(k, 1e-6))
+
+
+def _apply_policy(f: np.ndarray, codes: np.ndarray, policy: str,
+                  neutral: float = 1.0) -> np.ndarray:
+    """Neutralise the factor on classes the calibration never measured."""
+    if policy != "identity":
+        return f
+    out = np.array(f, copy=True)
+    out[~_supported_mask(codes)] = np.float32(neutral)
+    return out
+
+
 def _weighted_weather_ratio(materials: np.ndarray, weather: str) -> float:
     if materials.shape[0] == 0:
         return 1.0
@@ -330,32 +494,106 @@ def matsense_perturb(
     mode: str,
     cfg: PerturbConfig = PerturbConfig(),
     rng: np.random.Generator | None = None,
+    *,
+    record: dict | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return (xyz', intensity') for one of the three evaluation modes.
 
     mode = 'standard'  -> raw CARLA output, untouched (baseline 1)
     mode = 'global'    -> uniform dropout + uniform intensity scale (baseline 2)
     mode = 'matsense'  -> material/weather dropout + jitter + intensity (proposed)
+    mode = 'shuffled'  -> MatSense's own factors, permuted between points
+                          within range bins (material-assignment control)
 
     xyz:        (N, 3) float32   — LiDAR xyz in sensor frame
     intensity:  (N,)   float32   — raw CARLA intensity [0, 1]
     materials:  (N,)   object    — material label strings (from sem-LiDAR matching)
+
+    record: when given, receives {"keep": boolean mask over the INPUT points}.
+    Which returns survived is not recoverable from the output alone, because the
+    jitter moves the survivors; a consumer matching output positions back onto
+    input positions gets it approximately right and has no way to know where it
+    got it wrong. Keyword-only and defaulted, so every existing call is
+    unaffected and the equivalence checks still hold.
     """
     rng = rng or np.random.default_rng(cfg.seed)
     n = xyz.shape[0]
 
     if mode == "standard":
+        if record is not None:
+            record["keep"] = np.ones(n, dtype=bool)
         return xyz, intensity
+
+    if mode == "pertov":
+        # A second material-blind control, taken from an independent catalogue
+        # rather than constructed here. The `global` arm is ours, matched to our
+        # own operator by construction, so a reader is entitled to ask whether
+        # the attribution survives a baseline we did not design. PertOV's
+        # reflectivity reduction is a flat attenuation of the intensity channel
+        # with fixed severity levels; level 0 attenuates by 0.85, which is the
+        # level closest to the mean magnitude of the material-aware arm on these
+        # clouds (0.82), so the two are comparable in level and differ only in
+        # whether the attenuation carries material structure.
+        if record is not None:
+            record["keep"] = np.ones(n, dtype=bool)
+        import sys as _sys
+        pd = os.environ.get("PERTOV_DIR", "")
+        if pd and pd not in _sys.path:
+            _sys.path.insert(0, pd)
+        from perturbationdrive.perturbationfuncs import lidar_reduce_reflectivity
+        sev = int(os.environ.get("PERTOV_LIDAR_SCALE", "0"))
+        pc = np.column_stack([xyz, intensity]).astype(np.float32)
+        out = np.asarray(lidar_reduce_reflectivity(sev, pc))
+        return xyz, out[:, 3].astype(np.float32)
+
+    if mode == "level":
+        # The flat arm at a CHOSEN level, rather than at the level MatSense
+        # would deliver on this scene.
+        #
+        # It exists to find the edge. We know that at 1.000 the car finishes
+        # and at 0.795 it does not; we do not know where the threshold is, and
+        # without it "the level matters" stays an observation rather than a
+        # criterion. No dropout, no jitter, no structure: one multiplication,
+        # so along the sweep the only thing that changes is the number.
+        s = float(os.environ.get("MATSENSE_LEVEL", "1.0"))
+        if record is not None:
+            record["keep"] = np.ones(n, dtype=bool)
+        return xyz, (intensity * s).astype(np.float32)
 
     if mode == "global":
         keep = rng.random(n) >= cfg.global_dropout
-        mean_ratio = _weighted_weather_ratio(materials, weather)
-        return xyz[keep], intensity[keep] * mean_ratio
+        if record is not None:
+            record["keep"] = keep
+        if cfg.intensity_mode == "headroom":
+            # The level the material-aware arm will land on, with none of its
+            # structure. Weighted by intensity rather than by point count: the
+            # material-aware arm produces mean(I*f), and a flat scale s produces
+            # s*mean(I), so the two agree only for s = sum(I*f)/sum(I). The
+            # point-weighted mean leaves a covariance term behind, because the
+            # materials with the strongest factors are not the ones CARLA
+            # returns at average brightness, and the baseline then sits about
+            # half a per cent off the arm it is supposed to match.
+            f = _apply_policy(_contrast_factors(materials[keep], weather),
+                              _as_codes(materials[keep]), cfg.unsupported_policy)
+            inten = intensity[keep]
+            denom = float(np.sum(inten))
+            scale = float(np.sum(inten * f) / denom) if denom > 1e-9 else (
+                float(np.mean(f)) if f.size else 1.0)
+        else:
+            scale = _weighted_weather_ratio(materials, weather)
+        return xyz[keep], intensity[keep] * scale
 
     if mode == "matsense":
         # 1) Per-material dropout — moves geometry-based planners (BEV occupancy)
         p_drop = _dropout_probs(materials, weather, cfg)
+        # an unmeasured class loses no returns either: dropout is derived from
+        # alpha, so a carried-over alpha would delete points on a coefficient
+        # nobody estimated
+        p_drop = _apply_policy(p_drop, _as_codes(materials),
+                               cfg.unsupported_policy, neutral=0.0)
         keep = rng.random(n) >= p_drop
+        if record is not None:
+            record["keep"] = keep
         xyz2 = xyz[keep].copy()
         inten2 = intensity[keep].copy()
         mat2 = materials[keep]
@@ -370,10 +608,81 @@ def matsense_perturb(
             xyz2 = xyz2 + dirs * (rng.standard_normal((xyz2.shape[0], 1)) * jitter_scale)
 
         # 3) Runtime intensity follows the paper form exactly: I' = beta_m * alpha_m,c * I_sim.
-        inten2 = np.clip(inten2 * _intensity_factors(mat2, weather), 0.0, 1.0)
+        if cfg.apply_intensity:
+            if cfg.intensity_mode == "headroom":
+                # factors are at most 1 and the input is at most 1, so the clip
+                # is a guard against a malformed input, never a live operation
+                inten2 = np.clip(inten2 * _apply_policy(
+                    _contrast_factors(mat2, weather), _as_codes(mat2),
+                    cfg.unsupported_policy), 0.0, 1.0)
+            else:
+                inten2 = np.clip(inten2 * _intensity_factors(mat2, weather), 0.0, 1.0)
         return xyz2, inten2
 
-    raise ValueError(f"Unknown mode '{mode}'. Expected: standard | global | matsense")
+    if mode == "shuffled":
+        # Material-assignment randomization control.
+        #
+        # The `global` arm removes the material structure and replaces it with a
+        # flat shift of matched magnitude. It answers whether structure matters.
+        # It cannot answer whether being RIGHT about which material is which
+        # matters, because it has no structure left to be wrong about.
+        #
+        # This arm keeps the operator's own per-point factors and permutes them
+        # among the points. Not the class-to-coefficient table: the factors
+        # themselves, point by point. A permutation is a bijection, so the
+        # multiset of factors the cloud receives is the one MatSense computed,
+        # exactly. Point count, geometry, and the mean, the variance and every
+        # higher moment of the factor distribution are identical to MatSense by
+        # construction rather than by matching, and cannot drift when the scene
+        # composition changes. The single thing that differs is which point each
+        # factor lands on.
+        #
+        # The permutation is confined to range bins. CARLA's intensity is
+        # exp(-0.004 R), a function of range alone, and the material composition
+        # of a scan changes with range: asphalt is mostly near, facades mostly
+        # far. Permuting across the whole cloud would move a far point's factor
+        # onto a near point and confound material with distance, and the
+        # measurement band would then be reading a range effect. Binning first
+        # holds range fixed and randomises only the material within it.
+        #
+        # Only supported points take part. A class the calibration never
+        # measured carries a factor of exactly 1 under the identity policy, and
+        # letting those into the pool would inject ones into measured classes
+        # and dilute the very structure the arm exists to misplace.
+        f = _apply_policy(_contrast_factors(materials, weather),
+                          _as_codes(materials), cfg.unsupported_policy)
+        sup = _supported_mask(_as_codes(materials))
+        if record is not None:
+            record["keep"] = np.ones(n, dtype=bool)
+        if not sup.any():
+            return xyz, np.clip(intensity * f, 0.0, 1.0).astype(np.float32)
+        r = np.linalg.norm(xyz, axis=1)
+        # np.digitize on a fixed ladder rather than quantiles: a fixed ladder
+        # gives every arm and every scene the same bins, so two runs can be
+        # compared without the binning itself having changed underneath.
+        bins = np.digitize(r, cfg.shuffle_bin_edges)
+        out = np.array(f, copy=True)
+        idx = np.flatnonzero(sup)
+        for b in np.unique(bins[idx]):
+            cell = idx[bins[idx] == b]
+            # a bin holding one point permutes to itself; nothing to do, and
+            # rng.permutation on a single element would still consume draws
+            if cell.size > 1:
+                out[cell] = f[cell][rng.permutation(cell.size)]
+        # How much of the cloud the control actually reached. A permutation
+        # inside a bin that holds one class is a no-op, so on a street whose
+        # far bins are almost entirely facade the arm moves far fewer points
+        # than it touches. Without this number a null result in some scenario
+        # cannot be told apart from a shuffle that had nothing to shuffle, so
+        # it is carried out rather than left to be inferred later.
+        _SHUFFLE_COVERAGE.append(float(np.mean(out[idx] != f[idx])) if idx.size else 0.0)
+        if record is not None:
+            record["shuffle_moved_frac"] = _SHUFFLE_COVERAGE[-1]
+            record["shuffle_supported_frac"] = float(sup.mean())
+        return xyz, np.clip(intensity * out, 0.0, 1.0).astype(np.float32)
+
+    raise ValueError(f"Unknown mode '{mode}'. Expected: standard | global | level | "
+                     "matsense | shuffled | pertov")
 
 
 # ---------------------------------------------------------------------------
@@ -488,6 +797,14 @@ class ClosedLoopSession:
         self.rng = np.random.default_rng(cfg.seed)
         self._n_raw_last: int = 0
         self._n_pert_last: int = 0
+        # Initialised here and not only in get_perturbed_cloud: last_drop_stats
+        # is read during cleanup, so a run that fails before its first cloud
+        # raised AttributeError from the teardown path and replaced the real
+        # error with a useless one. That has now cost two debugging rounds.
+        self._n_unmatched_last: int = 0
+        self._n_unmapped_last: int = 0
+        self._sem_lag_last: int = -999
+        self.last_cloud: dict | None = None
         self._material_counts_last: dict[str, int] = {}
         self._global_mean_ratio_last: float = float("nan")
         self._sem_buf = _SensorBuffer()
@@ -611,6 +928,47 @@ class ClosedLoopSession:
         sensor.listen(self._sem_callback)
         return sensor
 
+    def _recheck_semantic_mounting(self, tol_m: float = 0.03):
+        """Re-mount the semantic sensor now that the agent's LiDAR exists.
+
+        The session is built before PCLA creates its sensors, so the discovery
+        at construction time never finds the agent's LiDAR and falls back to a
+        declared mounting. That mounting is right for one agent and wrong for
+        the others: transfuser sits at z=2.5 against LAV's 2.4, and the matcher
+        pairs returns within 0.40 degrees, which 10 cm exceeds at any range
+        below about 14 m. That is precisely the near field the study is about,
+        so a silent 10 cm error would corrupt the result rather than degrade it.
+
+        By the first delivered cloud the agent's sensors do exist, so the
+        discovery is repeated here and the sensor re-created if it is mounted
+        anywhere else. PCLA gives every agent the same LiDAR attributes, so only
+        the pose can differ.
+        """
+        try:
+            spec, transform, how = self._agent_lidar_spec(self._world, self._vehicle)
+        except Exception as exc:
+            print(f"[matsense] re-mount check failed: {exc!r}", flush=True)
+            return
+        cur = self._sem_lidar.get_transform() if self._sem_lidar is not None else None
+        veh = self._vehicle.get_transform()
+        if cur is not None:
+            # get_transform on an attached sensor is world space; compare the
+            # mounting offset, not the world position.
+            dz = (cur.location.z - veh.location.z) - transform.location.z
+            dx = (cur.location.x - veh.location.x) - transform.location.x
+            if (dx * dx + dz * dz) ** 0.5 <= tol_m:
+                print(f"[matsense] semantic mounting already correct "
+                      f"(z={transform.location.z:.2f}, {how})", flush=True)
+                return
+            print(f"[matsense] re-mounting the semantic LiDAR: was off by "
+                  f"{(dx*dx+dz*dz)**0.5:.3f} m, now {how}", flush=True)
+            try:
+                self._sem_lidar.stop(); self._sem_lidar.destroy()
+            except Exception:
+                pass
+        self._sem_buf = _SensorBuffer()
+        self._sem_lidar = self._spawn_semantic_lidar(self._world, self._vehicle)
+
     def _sem_callback(self, measurement):
         data = np.frombuffer(measurement.raw_data, dtype=SEMANTIC_LIDAR_DTYPE).copy()
         self._sem_buf.put(measurement.frame, data)
@@ -644,6 +1002,7 @@ class ClosedLoopSession:
         if not getattr(self, "_probed", False):
             self._probed = True
             print(f"[matsense] t: primo cloud a +{_time.time()-_IMPORT_T:.1f}s", flush=True)
+            self._recheck_semantic_mounting()
             try:
                 for a in self._world.get_actors().filter("sensor.lidar.*"):
                     par = a.parent
@@ -730,11 +1089,37 @@ class ClosedLoopSession:
         }
         self._global_mean_ratio_last = _weighted_weather_ratio(codes, self.weather)
 
+        _rec: dict = {}
         xyz2, inten2 = matsense_perturb(
             xyz, intensity, codes, self.weather, self.mode, self.cfg, self.rng,
+            record=_rec,
         )
         result = np.column_stack([xyz2, inten2]).astype(np.float32)
         self._n_pert_last = result.shape[0]
+        # Keep the pair the paper is about: the cloud as the simulator produced
+        # it and the cloud the agent actually received, on the agent's own
+        # sensor. The recorder saves a pseudo-reflectance of its own that is
+        # computed differently (range and incidence corrections, no level
+        # renormalisation) and is NOT this quantity; conflating the two would
+        # misdescribe the dataset. Overwritten each call, so it costs one frame.
+        self.last_cloud = {
+            "xyz_in": xyz.astype(np.float32, copy=True),
+            "intensity_in": intensity.astype(np.float32, copy=True),
+            "material": _codes_to_materials(codes),
+            "xyz_out": xyz2.astype(np.float32, copy=True),
+            "intensity_out": inten2.astype(np.float32, copy=True),
+        }
+        # Which returns survived, from the operator itself. This used to be
+        # recovered by matching output positions back onto input positions with
+        # a k-d tree, which is both a per-frame cost and wrong wherever the
+        # jitter moved a survivor: the nearest input point to a jittered return
+        # is not necessarily the one it came from.
+        keep = _rec.get("keep")
+        if keep is not None and len(keep) == len(codes):
+            self.last_cloud["keep"] = np.asarray(keep, dtype=bool)
+            self.last_cloud["material_out"] = _codes_to_materials(codes[keep])
+        else:
+            self.last_cloud["material_out"] = self.last_cloud["material"]
         return result
 
     @property
@@ -747,6 +1132,11 @@ class ClosedLoopSession:
             "n_perturbed": n_pert,
             "drop_frac": round(1.0 - n_pert / max(n_raw, 1), 4),
             "global_mean_ratio": self._global_mean_ratio_last,
+            "intensity_mode": self.cfg.intensity_mode,
+            # the profile the OPERATOR applied. The clog already carried
+            # profile_name from the command line, and for campaign 19 the two
+            # were different; recording only the request is what let that pass.
+            "operator_profile": active_profile(),
             "material_point_counts_json": json.dumps(self._material_counts_last, sort_keys=True),
             "n_unmatched": self._n_unmatched_last,
             "n_unmapped": self._n_unmapped_last,
@@ -804,6 +1194,13 @@ class BehaviourLogger:
         "profile_name", "profile_version", "profile_config_path", "profile_config_sha256",
         "route_file", "route_file_hash",
         "global_mean_ratio", "material_point_counts_json",
+        # which [0,1] mapping produced this row. Campaigns before and after the
+        # correction are not comparable, and a run that cannot say which one it
+        # used is a run nobody can place.
+        "intensity_mode",
+        # what the operator applied, next to profile_name which is what was
+        # asked for. Campaign 19 has them differing.
+        "operator_profile",
         "carla_client_version", "carla_server_version",
     ]
 
