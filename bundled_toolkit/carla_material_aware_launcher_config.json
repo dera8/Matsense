@@ -39,7 +39,7 @@
   "parked_scale": "1.0",
   "tool_config_path": "configs/material_aware_tool_config.json",
   "material_overrides": "",
-  "profile_name": "carla_default",
+  "profile_name": "realbag_empirical_v4",
   "max_save_frames": "0",
   "save_every": "10",
   "save_start_delay_seconds": "0.0",

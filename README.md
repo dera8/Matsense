@@ -123,14 +123,15 @@ Needs CARLA running with the desired map and the CARLA Python API importable.
 Typical settings:
 
 ```
-Weather         = nominal | rain | snow
-View            = material | pseudo | intensity
-Pseudo scale    = fixed
-Trajectory TXT  = optional recorded UTM trajectory
-Trajectory JSON = optional CARLA-local trajectory
-Parked JSON     = optional parked-vehicle layout
-Autopilot       = used when no trajectory is given
-Save dataset    = records frames, clouds and labels
+Weather          = nominal | rain | snow (snow is not calibrated)
+View             = RGB overlays | Material classes | Pseudo-reflectance | CARLA raw intensity
+Pseudo scale     = fixed
+Material profile = realbag_empirical_v4 by default (the calibrated profile)
+Trajectory TXT   = optional recorded UTM trajectory
+Trajectory JSON  = optional CARLA-local trajectory
+Parked JSON      = optional parked-vehicle layout
+Autopilot        = used when no trajectory is given
+Save dataset     = records frames, clouds and labels
 ```
 
 To use a full toolkit checkout instead of the bundled runtime, set the path in

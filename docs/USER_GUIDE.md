@@ -167,17 +167,18 @@ You can leave trajectory fields empty and enable **Autopilot** if no trajectory 
 Common settings:
 
 ```text
-Weather      nominal / rain / snow / fog
-View         material / pseudo / intensity
-Pseudo scale fixed / percentile
-Scene ID     scene_001
-Scenario     nominal / rain / snow / fog
+Weather          nominal / rain / snow
+View             RGB overlays / Material classes / Pseudo-reflectance / CARLA raw intensity
+Pseudo scale     fixed / percentile
+Material profile realbag_empirical_v4 (calibrated default) or another profile in the tool config
+Scene ID         scene_001
+Scenario         nominal / rain / snow
 ```
 
 Use:
 
 ```text
-View = material
+View = Material classes
 ```
 
 to inspect semantic material labels.
@@ -185,7 +186,7 @@ to inspect semantic material labels.
 Use:
 
 ```text
-View = pseudo
+View = Pseudo-reflectance
 ```
 
 to inspect material- and weather-aware pseudo-reflectance.
@@ -193,7 +194,7 @@ to inspect material- and weather-aware pseudo-reflectance.
 Use:
 
 ```text
-View = intensity
+View = CARLA raw intensity
 ```
 
 to inspect the raw CARLA LiDAR intensity.
@@ -303,7 +304,7 @@ scene_001/nominal/lidar_labels/
 Use:
 
 ```text
-View = pseudo
+View = Pseudo-reflectance
 Pseudo scale = fixed
 ```
 
@@ -326,8 +327,8 @@ Scenario     = non-empty
 
 For a short artifact demo, show:
 
-1. **Run Viewer** with `View = material`.
-2. **Run Viewer** with `View = pseudo`.
+1. **Run Viewer** with `View = Material classes`.
+2. **Run Viewer** with `View = Pseudo-reflectance`.
 3. The top-down LiDAR view and material legend.
 4. **Dataset Analyzer** trajectory point cloud.
 5. Per-class pseudo-reflectance plot in **Material Response**.

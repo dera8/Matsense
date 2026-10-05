@@ -49,7 +49,7 @@ DEFAULT_CONFIG = {
     "parked_json": "",
     "autopilot": False,
     "save_dataset": False,
-    "profile_name": "carla_default",
+    "profile_name": "",
     "traj_step": "5",
     "utm_offset_x": "0.0",
     "utm_offset_y": "0.0",
@@ -253,6 +253,27 @@ def load_launcher_config(toolkit_dir: Path | None) -> dict:
     config = dict(DEFAULT_CONFIG)
     config.update(read_json(config_path))
     return config
+
+
+def load_tool_config(toolkit_dir: Path | None) -> dict:
+    if toolkit_dir is None:
+        return {}
+    try:
+        return read_json(toolkit_dir / "configs" / "material_aware_tool_config.json")
+    except (OSError, ValueError):
+        return {}
+
+
+# What the viewer's --mode accepts for display. "global" is the
+# pseudo-reflectance colormap; older launcher configs called it "pseudo",
+# which the viewer rejects at argument parsing.
+VIEW_MODE_ALIASES = {"pseudo": "global"}
+
+# Conditions whose ratios are carried over rather than measured from real
+# recordings, whatever profile is selected.
+UNMEASURED_CONDITIONS = {
+    "snow": "Snow ratios are carried over, not measured: no real snow recordings were used for calibration.",
+}
 
 
 def list_scenes(dataset_root: Path) -> list[str]:
@@ -854,7 +875,6 @@ def build_viewer_command(toolkit_dir: Path, config: dict, values: dict) -> list[
         "--scene-id", values["scene_id"],
         "--scenario-name", values["scenario_name"],
         "--material-config", str(material_config),
-        "--profile-name", values["profile_name"],
         "--traj-step", str(values["traj_step"]),
         "--utm-offset-x", str(values["utm_offset_x"]),
         "--utm-offset-y", str(values["utm_offset_y"]),
@@ -869,6 +889,8 @@ def build_viewer_command(toolkit_dir: Path, config: dict, values: dict) -> list[
         "--save-start-delay-seconds", str(values["save_start_delay_seconds"]),
         "--strict-sync-timeout", str(values["strict_sync_timeout"]),
     ]
+    if values["profile_name"]:
+        cmd.extend(["--profile-name", values["profile_name"]])
     if values["traj_txt"]:
         cmd.extend(["--traj-txt", values["traj_txt"]])
     if values["traj_json"]:
@@ -893,8 +915,12 @@ def path_browser(label: str, default: str, key: str, kind: str, suffixes: tuple[
         st.session_state[input_key] = default
 
     def choose_path() -> str:
-        import tkinter as tk
-        from tkinter import filedialog
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+        except ImportError:
+            st.warning("The file dialog needs tkinter (on Ubuntu: `sudo apt install python3-tk`). Paste the path instead.")
+            return ""
 
         current = Path(st.session_state.get(input_key, "") or default or APP_DIR)
         if kind == "directory":
@@ -902,7 +928,11 @@ def path_browser(label: str, default: str, key: str, kind: str, suffixes: tuple[
         else:
             initial_dir = current.parent if current.exists() else APP_DIR
 
-        root = tk.Tk()
+        try:
+            root = tk.Tk()
+        except tk.TclError:
+            st.warning("No display available for the file dialog (headless or remote session). Paste the path instead.")
+            return ""
         root.withdraw()
         root.attributes("-topmost", True)
         try:
@@ -1316,6 +1346,8 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
             "directory",
         )
 
+    tool_config = load_tool_config(toolkit_dir)
+
     with st.form("viewer"):
         c1, c2, c3 = st.columns(3)
         host = c1.text_input("Host", value=str(config.get("host", "127.0.0.1")))
@@ -1338,11 +1370,12 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
         view_options = {
             "camera_triple": "RGB overlays: all 3",
             "material": "Material classes",
-            "pseudo": "Pseudo-reflectance",
+            "global": "Pseudo-reflectance",
             "intensity": "CARLA raw intensity",
         }
         mode_keys = list(view_options.keys())
         mode_default = str(config.get("mode", "camera_triple"))
+        mode_default = VIEW_MODE_ALIASES.get(mode_default, mode_default)
         mode = c2.selectbox(
             "View",
             mode_keys,
@@ -1355,14 +1388,37 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
 
         c1, c2, c3 = st.columns(3)
         scene_id = c1.text_input("Scene ID", value=str(config.get("scene_id", "scene_001")))
-        scenario_name = c2.text_input("Scenario name", value=str(config.get("scenario_name", weather)))
+        scenario_name = c2.text_input(
+            "Scenario name",
+            value="",
+            placeholder="same as Weather",
+            help="Folder the dataset is saved under. Leave empty to use the selected weather.",
+        )
         save_every = c3.number_input("Save every N frames", value=int(config.get("save_every", 10)), min_value=1)
+
+        profile_names = list(tool_config.get("profiles", {}))
+        profile_default = str(config.get("profile_name") or tool_config.get("default_profile") or "")
+        if profile_names:
+            profile_name = st.selectbox(
+                "Material profile",
+                profile_names,
+                index=profile_names.index(profile_default) if profile_default in profile_names else 0,
+                help="Profile whose coefficients the viewer applies. The tool config's default is the calibrated one.",
+            )
+        else:
+            profile_name = profile_default
 
         c1, c2, c3 = st.columns(3)
         autopilot = c1.checkbox("Autopilot", value=bool(config.get("autopilot", False)))
         save_dataset = c2.checkbox("Save dataset", value=bool(config.get("save_dataset", False)))
 
         launch = st.form_submit_button("Start Viewer")
+
+    if weather in UNMEASURED_CONDITIONS:
+        st.warning(UNMEASURED_CONDITIONS[weather])
+    profile_notes = str(tool_config.get("profiles", {}).get(profile_name, {}).get("notes", ""))
+    if profile_name and not profile_notes:
+        st.caption(f"Profile `{profile_name}` carries no calibration notes: treat its coefficients as declared, not measured.")
 
     values = {
         "host": host,
@@ -1380,11 +1436,11 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
         "parked_json": parked_json.strip(),
         "dataset_root": dataset_root,
         "scene_id": scene_id,
-        "scenario_name": scenario_name,
+        "scenario_name": scenario_name.strip() or weather,
         "autopilot": autopilot,
         "save_dataset": save_dataset,
         "save_every": save_every,
-        "profile_name": str(config.get("profile_name", "carla_default")),
+        "profile_name": profile_name,
         "traj_step": str(config.get("traj_step", 5)),
         "utm_offset_x": str(config.get("utm_offset_x", 0.0)),
         "utm_offset_y": str(config.get("utm_offset_y", 0.0)),
@@ -1536,7 +1592,10 @@ def evidence_browser() -> None:
         "This is where you read them without opening the JSON by hand."
     )
     if not OUTPUT_ANALYSIS.exists():
-        st.info(f"No {OUTPUT_ANALYSIS} directory.")
+        st.info(
+            f"No artefacts yet: {OUTPUT_ANALYSIS} does not exist. It is created by the "
+            "evaluation tools (matsense_eval.artefact) when an experiment writes its results."
+        )
         return
 
     df = _artefact_rows()
