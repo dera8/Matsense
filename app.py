@@ -278,6 +278,25 @@ VIEW_OPTIONS = {
     "intensity": "CARLA raw intensity",
 }
 
+# LiDAR models the Run Viewer can emulate. The viewer completes one full
+# sweep per simulation frame (its rotation frequency is the FPS), so the
+# density is given per sweep and converted to points per second at launch.
+LIDAR_MODELS = {
+    "Velodyne VLP-32C (real recordings)": {
+        "channels": 32, "points_per_sweep": 57600, "lidar_range": 200.0, "upper_fov": 15.0, "lower_fov": -25.0,
+        "note": "32 beams from -25 to +15 deg, 0.2 deg azimuth at 10 Hz (1800 x 32 returns per sweep), 200 m.",
+    },
+    "MatSense paper (CARLA, 64 ch)": {
+        "channels": 64, "points_per_sweep": 60000, "lidar_range": 85.0, "upper_fov": 10.0, "lower_fov": -30.0,
+        "note": "The closed-loop setup of the paper: 64 channels, 85 m, 600 000 points/s at 10 Hz.",
+    },
+    "Viewer default (64 ch)": {
+        "channels": 64, "points_per_sweep": 65000, "lidar_range": 80.0, "upper_fov": 10.0, "lower_fov": -30.0,
+        "note": "The viewer script's own defaults: 1.3 M points/s at 20 FPS.",
+    },
+}
+DEFAULT_LIDAR_MODEL = "Velodyne VLP-32C (real recordings)"
+
 # Conditions whose ratios are carried over rather than measured from real
 # recordings, whatever profile is selected.
 UNMEASURED_CONDITIONS = {
@@ -1039,13 +1058,15 @@ def build_viewer_command(toolkit_dir: Path, config: dict, values: dict) -> list[
     for flag, key in (
         ("--channels", "channels"),
         ("--pps", "pps"),
-        ("--rotation-frequency", "rotation_frequency"),
         ("--lidar-range", "lidar_range"),
         ("--upper-fov", "upper_fov"),
         ("--lower-fov", "lower_fov"),
     ):
         if key in values:
             cmd.extend([flag, str(values[key])])
+    if "pps" in values:
+        # The viewer sets the sensor's rotation to the FPS; record the same value.
+        cmd.extend(["--rotation-frequency", str(float(values["fps"]))])
     if values.get("use_base_nominal"):
         cmd.append("--use-base-nominal")
     if values.get("allow_version_mismatch"):
@@ -1545,15 +1566,47 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
             st.session_state["rv_scenario"] = str(preset["scenario_name"])
         st.session_state["rv_base_nominal"] = bool(preset.get("use_base_nominal", False))
 
+    lidar_default = LIDAR_MODELS[DEFAULT_LIDAR_MODEL]
+    for key, field in (
+        ("rv_channels", "channels"),
+        ("rv_points_per_sweep", "points_per_sweep"),
+        ("rv_range", "lidar_range"),
+        ("rv_upper_fov", "upper_fov"),
+        ("rv_lower_fov", "lower_fov"),
+    ):
+        st.session_state.setdefault(key, lidar_default[field])
+
+    def apply_lidar_model() -> None:
+        model = LIDAR_MODELS.get(st.session_state.get("rv_lidar_model", ""))
+        if not model:
+            return
+        st.session_state["rv_channels"] = model["channels"]
+        st.session_state["rv_points_per_sweep"] = model["points_per_sweep"]
+        st.session_state["rv_range"] = model["lidar_range"]
+        st.session_state["rv_upper_fov"] = model["upper_fov"]
+        st.session_state["rv_lower_fov"] = model["lower_fov"]
+
     st.subheader("Run Settings")
+    c1, c2 = st.columns(2)
     if presets:
-        st.selectbox(
+        c1.selectbox(
             "Preset",
             ["Custom"] + list(presets),
             key="rv_preset",
             on_change=apply_preset,
             help="Fills weather, view and display settings. Everything stays editable below.",
         )
+    lidar_choices = list(LIDAR_MODELS) + ["Custom"]
+    lidar_model = c2.selectbox(
+        "LiDAR model",
+        lidar_choices,
+        index=lidar_choices.index(DEFAULT_LIDAR_MODEL),
+        key="rv_lidar_model",
+        on_change=apply_lidar_model,
+        help="Fills the LiDAR sensor section. Values stay editable there.",
+    )
+    if lidar_model in LIDAR_MODELS:
+        c2.caption(LIDAR_MODELS[lidar_model]["note"])
 
     with st.form("viewer"):
         c1, c2, c3 = st.columns(3)
@@ -1643,15 +1696,14 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
 
         with st.expander("LiDAR sensor"):
             c1, c2, c3 = st.columns(3)
-            channels = c1.number_input("Channels", value=int(config.get("channels", 64)), min_value=1)
-            pps = c2.number_input("Points per second", value=int(config.get("pps", 1300000)), min_value=1000, step=100000)
-            rotation_frequency = c3.number_input(
-                "Rotation frequency (Hz)", value=float(config.get("rotation_frequency", 20.0)), min_value=1.0, step=1.0
-            )
+            st.caption("The viewer completes one full sweep per frame, so points per second = points per sweep x FPS.")
+            c1, c2 = st.columns(2)
+            channels = c1.number_input("Channels", key="rv_channels", min_value=1, step=1)
+            points_per_sweep = c2.number_input("Points per sweep", key="rv_points_per_sweep", min_value=100, step=1000)
             c1, c2, c3 = st.columns(3)
-            lidar_range = c1.number_input("Range (m)", value=float(config.get("lidar_range", 80.0)), min_value=1.0)
-            upper_fov = c2.number_input("Upper FOV (deg)", value=float(config.get("upper_fov", 10.0)))
-            lower_fov = c3.number_input("Lower FOV (deg)", value=float(config.get("lower_fov", -30.0)))
+            lidar_range = c1.number_input("Range (m)", key="rv_range", min_value=1.0)
+            upper_fov = c2.number_input("Upper FOV (deg)", key="rv_upper_fov")
+            lower_fov = c3.number_input("Lower FOV (deg)", key="rv_lower_fov")
 
         with st.expander("CARLA connection"):
             c1, c2, c3 = st.columns(3)
@@ -1707,8 +1759,7 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
         "save_start_delay_seconds": save_start_delay,
         "strict_sync_timeout": strict_sync_timeout,
         "channels": int(channels),
-        "pps": int(pps),
-        "rotation_frequency": rotation_frequency,
+        "pps": int(points_per_sweep) * int(fps),
         "lidar_range": lidar_range,
         "upper_fov": upper_fov,
         "lower_fov": lower_fov,

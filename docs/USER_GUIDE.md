@@ -186,9 +186,20 @@ Recording                       scene ID, scenario name (empty = same as Weather
 Display                         pseudo scale, display percentile, nominal base values, window size, FPS
 Trajectory and parked vehicles  follow mode, trajectory step, control smoothing, UTM offsets
                                 (0/0 = read from the map's .xodr), Z offsets, max parked vehicles, seed
-LiDAR sensor                    channels, points per second, rotation frequency, range, vertical FOV
+LiDAR sensor                    channels, points per sweep, range, vertical FOV
 CARLA connection                host, port, Traffic Manager port, allow version mismatch
 ```
+
+Next to the preset, **LiDAR model** fills the LiDAR sensor section:
+
+```text
+Velodyne VLP-32C (real recordings)  32 beams, -25 to +15 deg, 57 600 points per sweep, 200 m (default)
+MatSense paper (CARLA, 64 ch)       64 beams, -30 to +10 deg, 60 000 points per sweep, 85 m
+Viewer default (64 ch)              64 beams, -30 to +10 deg, 65 000 points per sweep, 80 m
+```
+
+The viewer completes one full sweep per frame (its rotation frequency is the
+FPS), so the dashboard passes points per second = points per sweep x FPS.
 
 Use `View = Material classes` to inspect semantic material labels,
 `View = Pseudo-reflectance` to inspect the material- and weather-aware response,
