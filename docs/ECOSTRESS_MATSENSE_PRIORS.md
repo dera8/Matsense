@@ -6,8 +6,10 @@ This document defines the practical ECOSTRESS integration plan for the current M
 
 The target sensor is:
 
-- Velodyne `HDL-32E`
-- near-infrared wavelength: approximately `0.905 um`
+- Velodyne `VLP-32C` (the roof-centre LiDAR of the Fortuna recording vehicle)
+- near-infrared wavelength: approximately `0.903 um`
+
+The `905nm` names of the CSV columns and templates are kept; the 2 nm difference is negligible for these priors.
 
 The goal is not to claim that MatSense pseudo-reflectance is a direct radiometric estimate of laboratory reflectance. The goal is narrower:
 
@@ -25,7 +27,7 @@ The current MatSense pseudo-reflectance is an empirical quantity derived from:
 
 It is therefore sensor- and pipeline-dependent.
 
-By contrast, ECOSTRESS provides laboratory spectral reflectance / emissivity profiles. These can be used to define plausible nominal ordering and ranges for materials at the HDL-32E wavelength, but should not be treated as a direct one-to-one ground truth for point-level pseudo-reflectance.
+By contrast, ECOSTRESS provides laboratory spectral reflectance / emissivity profiles. These can be used to define plausible nominal ordering and ranges for materials at the VLP-32C wavelength, but should not be treated as a direct one-to-one ground truth for point-level pseudo-reflectance.
 
 ## 2. Material family mapping
 
@@ -114,7 +116,7 @@ with the same downstream weather ratios.
 
 Use wording of this kind:
 
-> ECOSTRESS priors were used as physics-informed nominal material priors at the HDL-32E wavelength, while weather-conditioned ratios remained empirically estimated from the real-bag pipeline.
+> ECOSTRESS priors were used as physics-informed nominal material priors at the VLP-32C wavelength, while weather-conditioned ratios remained empirically estimated from the real-bag pipeline.
 
 Avoid wording of this kind:
 
