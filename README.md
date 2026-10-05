@@ -67,6 +67,14 @@ weather, view mode, trajectory, parked vehicles, autopilot and dataset
 recording. Drives a recorded trajectory when one is given, or CARLA autopilot
 when none is.
 
+**Profile.** Shows a material profile: per-material coefficients, which ones
+are measured and which declared, the factor applied to CARLA's intensity, and
+the CARLA-class-to-material mapping.
+
+**Experiment.** Plans and runs closed-loop campaigns with a PCLA agent across
+sensing arms, conditions and seeds, then compares the arms on route
+completion, collisions, cross-track error and TTC with paired statistics.
+
 **Dataset Analyzer.** Reads a recorded dataset from
 `output_dataset/<scene_id>/<scenario>/`, shows the aggregated top-down cloud
 over the trajectory, inspects single frames, and compares the material-aware
@@ -79,7 +87,7 @@ matsense_streamlit_app
 |-- .streamlit/config.toml
 |-- bundled_toolkit/
 |   |-- configs/          calibrated profiles and material overrides
-|   |-- scripts/          CARLA runtime: viewer, recorder, response model
+|   |-- scripts/          CARLA runtime: viewer, recorder, response model, campaign runner
 |   `-- src/material_aware_toolkit/
 |-- docs/
 |   |-- assets/
@@ -163,9 +171,10 @@ against CARLA's intensity.
 
 ## Not in this repository
 
-Campaign runners, calibration and analysis scripts, scenario definitions, agent
-patches and figure generators. They are part of the replication package rather
-than of the tool.
+The paper's campaign scripts, calibration and analysis scripts, scenario
+definitions, agent patches (the PCLA fork with the `perturb_fn` hook) and figure
+generators. They are part of the replication package rather than of the tool.
+The Experiment page includes its own generic campaign runner.
 
 ## Citation
 

@@ -30,6 +30,7 @@ PID_FILE = Path(__file__).with_name(".matsense_viewer.pid")
 VIEWER_STDOUT = APP_DIR / "viewer_stdout.log"
 VIEWER_STDERR = APP_DIR / "viewer_stderr.log"
 VIEWER_COMMAND = APP_DIR / "viewer_command.txt"
+CAMPAIGN_ROOT = APP_DIR / "output_campaigns"
 
 DEFAULT_CONFIG = {
     "host": "127.0.0.1",
@@ -1683,6 +1684,514 @@ def profile_browser(toolkit_dir: Path | None) -> None:
             st.json(profile)
 
 
+# Sensing arms of the closed-loop study (paper Section 5.2) and the viewer
+# --mode value that selects each one when a PCLA agent drives.
+SENSING_ARMS = {
+    "standard": "intensity",
+    "global": "global",
+    "matsense": "material",
+    "shuffled": "shuffled",
+    "level": "level",
+}
+ARM_BY_MODE = {mode: arm for arm, mode in SENSING_ARMS.items()}
+ARM_HELP = {
+    "standard": "CARLA's own response, unchanged",
+    "global": "one scalar per frame, at the level MatSense would deliver",
+    "matsense": "material- and condition-dependent response from the profile",
+    "shuffled": "MatSense factors permuted among points in range bins",
+    "level": "a constant scale chosen here, no dropout or jitter",
+}
+OUTCOME_METRICS = {
+    "route_completion_ratio": "Route completion (fraction)",
+    "route_completion_m": "Route completion (m)",
+    "final_cross_track_error_m": "Final cross-track error (m)",
+    "min_ttc_proxy_s": "Minimum TTC proxy (s)",
+    "max_deceleration_mps2": "Peak deceleration (m/s²)",
+    "first_brake_progress_m": "Progress at first brake (m)",
+    "collision_count": "Collisions",
+}
+
+
+def safe_name(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9-]+", "-", text.strip()).strip("-") or "run"
+
+
+def load_toolkit_module(toolkit_dir: Path | None, name: str):
+    if toolkit_dir is None:
+        return None
+    scripts = str(toolkit_dir / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    try:
+        return __import__(name)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def build_campaign_plan(toolkit_dir: Path, campaign_dir: Path, c: dict) -> dict:
+    script = toolkit_dir / "scripts" / "carla_pygame_lidar_dataset_recorder_friendly.py"
+    material_config = toolkit_dir / "configs" / "material_aware_tool_config.json"
+    scenario_label = safe_name(c["scenario_label"])
+    runs = []
+    for weather in c["conditions"]:
+        for arm in c["arms"]:
+            for seed in c["seeds"]:
+                for rep in range(c["replicates"]):
+                    run_id = f"{scenario_label}__{arm}__{weather}__seed{seed}__rep{rep}"
+                    cmd = [
+                        sys.executable, str(script),
+                        "--host", c["host"], "--port", str(c["port"]), "--tm-port", str(c["tm_port"]),
+                        "--fps", "20",
+                        "--weather", weather,
+                        "--mode", SENSING_ARMS[arm],
+                        "--material-config", str(material_config),
+                        "--profile-name", c["profile"],
+                        "--dataset-root", str(campaign_dir),
+                        "--scene-id", "runs",
+                        "--scenario-name", run_id,
+                        "--seed", str(c["scene_seed"]),
+                        "--pcla-perturb-seed", str(seed),
+                        "--replicate-index", str(rep),
+                        "--condition-type", scenario_label,
+                        "--pcla-agent", c["agent"],
+                        "--pcla-town", c["town"],
+                        "--pcla-spawn-index", str(c["spawn_index"]),
+                        "--pcla-max-seconds", str(c["max_seconds"]),
+                        "--pcla-stopped-seconds", str(c["stopped_seconds"]),
+                        "--pcla-route-dev-threshold", str(c["route_dev_threshold"]),
+                        "--pcla-spawn-jitter-m", str(c["spawn_jitter_m"]),
+                        "--pcla-dropout-gain", str(c["dropout_gain"]),
+                        "--pcla-jitter-gain", str(c["jitter_gain"]),
+                    ]
+                    if c["pcla_dir"]:
+                        cmd += ["--pcla-dir", c["pcla_dir"]]
+                    if c["route"]:
+                        cmd += ["--pcla-route", c["route"]]
+                    if c["srunner_scenario"]:
+                        cmd += ["--srunner-scenario", c["srunner_scenario"]]
+                        for param in c["srunner_params"]:
+                            cmd += ["--srunner-param", param]
+                    if c["headless"]:
+                        cmd += ["--no-draw", "--disable-viewer-cameras"]
+                    if c["allow_version_mismatch"]:
+                        cmd.append("--allow-version-mismatch")
+                    run = {"id": run_id, "arm": arm, "weather": weather, "seed": seed, "replicate": rep, "cmd": cmd}
+                    if arm == "level":
+                        run["env"] = {"MATSENSE_LEVEL": str(c["level"])}
+                    runs.append(run)
+    return {
+        "name": campaign_dir.name,
+        "created": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "settings": c,
+        "cwd": str(toolkit_dir / "scripts"),
+        "env": {"PYTHONPATH": toolkit_env(toolkit_dir)["PYTHONPATH"], "MATSENSE_FORCE_EXIT_ON_SHUTDOWN": "1"},
+        "runs": runs,
+    }
+
+
+def campaign_status(campaign_dir: Path) -> dict | None:
+    try:
+        status = read_json(campaign_dir / "status.json")
+    except (OSError, ValueError):
+        return None
+    if not status:
+        return None
+    if status.get("state") == "running" and not process_alive(int(status.get("pid", -1))):
+        status["state"] = "interrupted"
+    return status
+
+
+def list_campaigns(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    found = [p.parent for p in root.glob("*/campaign.json")] + [p.parent for p in root.glob("*/runs")]
+    return sorted(set(found), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def load_campaign_summaries(campaign_dir: Path, settle_s: float, harness_modes: tuple) -> tuple[pd.DataFrame, int]:
+    rows, unsettled = [], 0
+    for f in sorted((campaign_dir / "runs").glob("*/run_summary.json")):
+        if time.time() - f.stat().st_mtime < settle_s:
+            unsettled += 1
+            continue
+        try:
+            d = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        d["run_id"] = f.parent.name
+        d["arm"] = ARM_BY_MODE.get(str(d.get("mode", "")), str(d.get("mode", "?")))
+        d["harness_failure"] = d.get("termination_mode") in harness_modes
+        d["completed"] = d.get("termination_mode") == "completed"
+        rows.append(d)
+    df = pd.DataFrame(rows)
+    for col in OUTCOME_METRICS:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df, unsettled
+
+
+def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
+    tool_config = load_tool_config(toolkit_dir)
+    profile_names = list(tool_config.get("profiles", {})) or [""]
+    default_profile = str(tool_config.get("default_profile") or profile_names[0])
+
+    st.caption(
+        "A campaign drives the same route and hazard under several sensing arms, conditions and seeds, "
+        "with a PCLA agent at the wheel. Runs execute one after another in the background; "
+        "you can close the browser and come back."
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        pcla_dir = path_browser("PCLA directory (forked, with the perturb_fn hook)", "", "exp_pcla_dir", "directory")
+    with c2:
+        route = path_browser("Route XML", "", "exp_route", "file", (".xml",))
+
+    with st.form("campaign"):
+        c1, c2, c3 = st.columns(3)
+        name = c1.text_input("Campaign name", value=time.strftime("campaign_%Y%m%d_%H%M"))
+        agent = c2.text_input("PCLA agent", value="tfv4_l6_0", help="Agent name as PCLA knows it, e.g. tfv4_l6_0.")
+        profile = c3.selectbox(
+            "Material profile", profile_names,
+            index=profile_names.index(default_profile) if default_profile in profile_names else 0,
+        )
+        c1, c2, c3 = st.columns(3)
+        town = c1.text_input("Town", value="Town02")
+        spawn_index = c2.number_input("Spawn index", value=31, min_value=0, step=1)
+        scenario_label = c3.text_input("Scenario label", value="scenario", help="Short name used in run folders.")
+        c1, c2 = st.columns(2)
+        srunner_scenario = c1.text_input(
+            "ScenarioRunner hazard (optional)",
+            placeholder="class name, e.g. ParkingCrossingPedestrian",
+            help="Needs SCENARIO_RUNNER_ROOT and CARLA_PYTHONAPI_ROOT. Leave empty for a route without a scripted hazard.",
+        )
+        srunner_params = c2.text_input("Hazard parameters", placeholder="distance=12, offset=0.6")
+
+        st.markdown("**Design**")
+        c1, c2 = st.columns(2)
+        arms = c1.multiselect(
+            "Sensing arms", list(SENSING_ARMS), default=["standard", "global", "matsense"],
+            help="; ".join(f"{a}: {d}" for a, d in ARM_HELP.items()),
+        )
+        conditions = c2.multiselect("Conditions", WEATHER_OPTIONS, default=["nominal", "rain"])
+        c1, c2, c3 = st.columns(3)
+        seeds_text = c1.text_input("Perturbation seeds", value="1, 2, 3")
+        replicates = c2.number_input("Replicates per cell", value=3, min_value=1, step=1)
+        level = c3.number_input("Level (only for the level arm)", value=1.0, min_value=0.0, step=0.05)
+
+        with st.expander("Run limits and operator"):
+            c1, c2, c3 = st.columns(3)
+            max_seconds = c1.number_input("Max simulated time (s)", value=35.0, min_value=0.0, step=5.0, help="0 = no limit.")
+            stopped_seconds = c2.number_input("End after stationary for (s)", value=4.0, min_value=0.0, step=1.0)
+            route_dev_threshold = c3.number_input("End above route deviation (m)", value=5.0, min_value=0.0, step=0.5)
+            c1, c2, c3 = st.columns(3)
+            dropout_gain = c1.number_input("Dropout gain", value=0.4, min_value=0.0, step=0.05)
+            jitter_gain = c2.number_input("Range jitter gain", value=0.10, min_value=0.0, step=0.01)
+            spawn_jitter_m = c3.number_input(
+                "Spawn jitter (m)", value=0.0, min_value=0.0, step=0.01,
+                help="Centimetre-scale start-pose jitter per replicate. Without it, runs that apply no perturbation can be identical copies.",
+            )
+            c1, c2 = st.columns(2)
+            scene_seed = c1.number_input("Scene seed", value=int(config.get("seed", 42)), step=1, help="Kept fixed across runs.")
+            headless = c2.checkbox("Headless (no pygame drawing, faster)", value=True)
+
+        with st.expander("CARLA connection"):
+            c1, c2, c3 = st.columns(3)
+            host = c1.text_input("Host", value=str(config.get("host", "127.0.0.1")))
+            port = c2.number_input("Port", value=int(config.get("port", 2000)), step=1)
+            tm_port = c3.number_input("Traffic Manager port", value=int(config.get("tm_port", 8000)), step=1)
+            allow_version_mismatch = st.checkbox("Allow client/server version mismatch", value=False)
+
+        launch = st.form_submit_button("Start campaign", type="primary")
+
+    try:
+        seeds = [int(x) for x in re.split(r"[,\s]+", seeds_text.strip()) if x]
+    except ValueError:
+        seeds = []
+        st.error("Seeds must be integers separated by commas.")
+    n_runs = len(arms) * len(conditions) * len(seeds) * int(replicates)
+    st.info(
+        f"{len(arms)} arms × {len(conditions)} conditions × {len(seeds)} seeds × {int(replicates)} replicates "
+        f"= **{n_runs} runs**, each capped at {max_seconds:g} s of simulated time."
+    )
+    for condition in conditions:
+        if condition in UNMEASURED_CONDITIONS:
+            st.warning(UNMEASURED_CONDITIONS[condition])
+    if "nominal" in conditions and set(arms) & {"global", "matsense", "shuffled"}:
+        st.caption(
+            "Under nominal conditions every alpha is 1, so no return is dropped or moved: "
+            "the arms differ only in intensity there."
+        )
+
+    if launch:
+        problems = []
+        if not arms or not conditions or not seeds:
+            problems.append("choose at least one arm, one condition and one seed")
+        if not agent.strip():
+            problems.append("give the PCLA agent name")
+        if pcla_dir and not Path(pcla_dir).is_dir():
+            problems.append(f"PCLA directory not found: {pcla_dir}")
+        if route and not Path(route).is_file():
+            problems.append(f"route file not found: {route}")
+        campaign_dir = CAMPAIGN_ROOT / (re.sub(r"[^A-Za-z0-9_-]+", "-", name.strip()).strip("-") or "campaign")
+        if (campaign_dir / "campaign.json").exists():
+            problems.append(f"a campaign named {campaign_dir.name} already exists; resume it below or choose another name")
+        if not problems:
+            preflight = check_carla(toolkit_dir, host.strip(), int(port))
+            blocker = preflight_blocker(preflight, allow_version_mismatch)
+            if blocker:
+                problems.append(blocker)
+        if problems:
+            st.error("Campaign not started: " + "; ".join(problems))
+        else:
+            settings = {
+                "agent": agent.strip(), "pcla_dir": pcla_dir.strip(), "route": route.strip(), "town": town.strip(),
+                "spawn_index": int(spawn_index), "scenario_label": scenario_label, "profile": profile,
+                "srunner_scenario": srunner_scenario.strip(),
+                "srunner_params": [x.strip() for x in srunner_params.split(",") if x.strip()],
+                "arms": arms, "conditions": conditions, "seeds": seeds, "replicates": int(replicates),
+                "level": float(level), "max_seconds": float(max_seconds), "stopped_seconds": float(stopped_seconds),
+                "route_dev_threshold": float(route_dev_threshold), "dropout_gain": float(dropout_gain),
+                "jitter_gain": float(jitter_gain), "spawn_jitter_m": float(spawn_jitter_m),
+                "scene_seed": int(scene_seed), "headless": headless, "host": host.strip(), "port": int(port),
+                "tm_port": int(tm_port), "allow_version_mismatch": allow_version_mismatch,
+            }
+            campaign_dir.mkdir(parents=True, exist_ok=True)
+            plan = build_campaign_plan(toolkit_dir, campaign_dir, settings)
+            (campaign_dir / "campaign.json").write_text(json.dumps(plan, indent=1), encoding="utf-8")
+            start_campaign(toolkit_dir, campaign_dir)
+            st.session_state["exp_selected"] = campaign_dir.name
+            st.success(f"Campaign {campaign_dir.name} started: {len(plan['runs'])} runs.")
+
+    st.subheader("Campaigns")
+    campaigns = [c for c in list_campaigns(CAMPAIGN_ROOT) if (c / "campaign.json").exists()]
+    if not campaigns:
+        st.caption(f"No campaigns yet under {CAMPAIGN_ROOT}.")
+        return
+    names = [c.name for c in campaigns]
+    selected = st.selectbox(
+        "Campaign", names,
+        index=names.index(st.session_state["exp_selected"]) if st.session_state.get("exp_selected") in names else 0,
+        key="exp_status_pick",
+    )
+    campaign_dir = CAMPAIGN_ROOT / selected
+    status = campaign_status(campaign_dir)
+    plan = read_json(campaign_dir / "campaign.json")
+    total = len(plan.get("runs", []))
+    done = len(list((campaign_dir / "runs").glob("*/run_summary.json")))
+    st.progress(min(done / total, 1.0) if total else 0.0, text=f"{done} of {total} runs have a summary")
+    state = (status or {}).get("state", "not started")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("State", state)
+    c2.metric("Current run", (status or {}).get("current") or "—")
+    c3.metric("Failed runs", len((status or {}).get("failed", [])))
+    b1, b2, _ = st.columns([1, 1, 4])
+    running = state == "running"
+    if b1.button("Resume", disabled=running or done >= total, help="Runs only what has no summary yet."):
+        preflight = check_carla(toolkit_dir, plan["settings"]["host"], plan["settings"]["port"])
+        blocker = preflight_blocker(preflight, plan["settings"].get("allow_version_mismatch", False))
+        if blocker:
+            st.error(f"Not resumed: {blocker}")
+        else:
+            start_campaign(toolkit_dir, campaign_dir)
+            st.rerun()
+    if b2.button("Stop", disabled=not running):
+        try:
+            os.kill(int(status["pid"]), signal.SIGTERM)
+            st.info("Stop requested: the current run is ended and the campaign stops.")
+        except OSError as exc:
+            st.error(f"Could not stop the campaign: {exc}")
+    if status and status.get("failed"):
+        with st.expander("Failed runs"):
+            st.dataframe(pd.DataFrame(status["failed"]), use_container_width=True, hide_index=True)
+    current = (status or {}).get("current")
+    log_file = campaign_dir / "logs" / f"{current}.log" if current else None
+    if log_file is not None and log_file.exists():
+        with st.expander("Log of the current run"):
+            st.code(log_file.read_text(encoding="utf-8", errors="replace")[-4000:], language="text")
+    if running:
+        st.caption("Progress updates when the page reruns; press R or interact with the page to refresh.")
+
+
+def start_campaign(toolkit_dir: Path, campaign_dir: Path) -> None:
+    runner = toolkit_dir / "scripts" / "matsense_campaign.py"
+    kwargs = {}
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    with open(campaign_dir / "runner.log", "a", encoding="utf-8") as log:
+        subprocess.Popen(
+            [sys.executable, str(runner), str(campaign_dir)],
+            cwd=str(toolkit_dir / "scripts"), stdout=log, stderr=subprocess.STDOUT, **kwargs,
+        )
+    time.sleep(0.5)
+
+
+def experiment_results(toolkit_dir: Path | None) -> None:
+    mev = load_toolkit_module(toolkit_dir, "matsense_eval")
+    settle_s = float(getattr(mev, "SETTLE_S", 90.0))
+    harness_modes = tuple(getattr(mev, "HARNESS_MODES", ("agent_error",)))
+
+    campaigns = list_campaigns(CAMPAIGN_ROOT)
+    # Campaigns with results first, newest first within each group.
+    campaigns.sort(key=lambda c: not any((c / "runs").glob("*/run_summary.json")))
+    c1, c2 = st.columns([2, 3])
+    names = [c.name for c in campaigns]
+    choice = c1.selectbox("Campaign", names + ["Other folder…"], key="exp_results_pick") if names else "Other folder…"
+    if choice == "Other folder…":
+        other = c2.text_input("Campaign folder (containing runs/)", key="exp_results_dir")
+        if not other:
+            st.caption(f"No campaigns under {CAMPAIGN_ROOT}. Point to a folder that contains runs/<run>/run_summary.json.")
+            return
+        campaign_dir = Path(other)
+    else:
+        campaign_dir = CAMPAIGN_ROOT / choice
+
+    df, unsettled = load_campaign_summaries(campaign_dir, settle_s, harness_modes)
+    if unsettled:
+        st.caption(f"{unsettled} run summaries were written less than {settle_s:.0f} s ago and are left out until they settle.")
+    if df.empty:
+        st.info("No finished runs in this campaign yet.")
+        return
+
+    valid = df[~df["harness_failure"]]
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Runs", len(df))
+    m2.metric("Completed", int(valid["completed"].sum()))
+    m3.metric("Collisions", int((valid["termination_mode"] == "collision").sum()))
+    m4.metric("Harness failures (excluded)", int(df["harness_failure"].sum()))
+    if df["harness_failure"].any():
+        st.caption("A run that died inside the agent never drove: it is not a failure of its arm and is excluded from every count below.")
+    profiles = sorted(set(valid.get("profile_name", pd.Series(dtype=str)).dropna().astype(str)))
+    if len(profiles) > 1:
+        st.warning(f"This campaign mixes profiles: {', '.join(profiles)}.")
+
+    st.subheader("Outcomes per arm")
+    group_cols = ["weather", "arm"]
+    aggregations = {
+        "runs": ("run_id", "count"),
+        "completed": ("completed", "sum"),
+        "collisions": ("termination_mode", lambda v: int((v == "collision").sum())),
+        "stopped": ("termination_mode", lambda v: int((v == "stopped").sum())),
+    }
+    if "route_completion_ratio" in valid.columns:
+        aggregations["completion_median"] = ("route_completion_ratio", "median")
+    if "min_ttc_proxy_s" in valid.columns:
+        aggregations["min_ttc_median"] = ("min_ttc_proxy_s", "median")
+    table = valid.groupby(group_cols).agg(**aggregations).reset_index()
+    table["completion_rate"] = table["completed"] / table["runs"]
+    st.dataframe(table.round(3), use_container_width=True, hide_index=True)
+    fig = px.bar(
+        table, x="arm", y="completion_rate", color="weather", barmode="group",
+        color_discrete_map=SCENARIO_COLORS, title="Share of runs that complete the route",
+    )
+    fig.update_layout(template="plotly_white", yaxis_range=[0, 1], legend_title_text="", margin=dict(l=20, r=20, t=60, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+    metrics = [m for m in OUTCOME_METRICS if m in valid.columns]
+    metric = st.selectbox("Metric", metrics, format_func=lambda m: OUTCOME_METRICS[m], key="exp_metric")
+    fig = px.box(
+        valid, x="arm", y=metric, color="weather", points="all", hover_data=["run_id", "termination_mode"],
+        color_discrete_map=SCENARIO_COLORS,
+    )
+    fig.update_layout(template="plotly_white", yaxis_title=OUTCOME_METRICS[metric], legend_title_text="",
+                      margin=dict(l=20, r=20, t=30, b=20))
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Paired comparison")
+    arms_present = sorted(valid["arm"].unique())
+    baseline = st.selectbox(
+        "Baseline arm", arms_present,
+        index=arms_present.index("standard") if "standard" in arms_present else 0, key="exp_baseline",
+    )
+    st.caption(
+        "Runs are paired on condition, seed and replicate, so each difference compares the same "
+        "situation under two sensing arms. Completion is compared with Fisher's exact test."
+    )
+    keys = [k for k in ("condition_type", "weather", "seed", "replicate") if k in valid.columns]
+    rows = []
+    base = valid[valid["arm"] == baseline].set_index(keys)
+    for arm in arms_present:
+        if arm == baseline:
+            continue
+        other = valid[valid["arm"] == arm].set_index(keys)
+        joined = other[[metric, "completed"]].join(base[[metric, "completed"]], rsuffix="_base", how="inner").dropna(
+            subset=[metric, f"{metric}_base"]
+        )
+        row = {"arm": arm, "vs": baseline, "pairs": len(joined)}
+        if len(joined) >= 2 and mev is not None:
+            try:
+                res = mev.paired(joined[metric], joined[f"{metric}_base"])
+                row.update({"mean difference": res["mean"], "95% CI": f"[{res['ci'][0]:.3g}, {res['ci'][1]:.3g}]",
+                            "Wilcoxon p": res["p"]})
+                a = valid[valid["arm"] == arm]
+                b = valid[valid["arm"] == baseline]
+                row["completion p (Fisher)"] = mev.fisher(int(a["completed"].sum()), len(a), int(b["completed"].sum()), len(b))
+            except Exception as exc:  # noqa: BLE001
+                row["note"] = f"statistics unavailable: {exc}"
+        elif len(joined) >= 1:
+            row["mean difference"] = float((joined[metric] - joined[f"{metric}_base"]).mean())
+        rows.append(row)
+    if rows:
+        st.dataframe(pd.DataFrame(rows).round(4), use_container_width=True, hide_index=True)
+    else:
+        st.caption("Only one arm in this campaign: nothing to compare.")
+
+    st.subheader("Run traces")
+    st.caption("The same situation under each arm, tick by tick, from the behaviour log.")
+    combos = valid[keys].drop_duplicates().astype(str).agg(" / ".join, axis=1).tolist() if keys else []
+    if combos:
+        pick = st.selectbox("Situation (" + " / ".join(keys) + ")", sorted(set(combos)), key="exp_trace_pick")
+        sel = valid[valid[keys].astype(str).agg(" / ".join, axis=1) == pick]
+        signal_col = st.selectbox(
+            "Signal", ["speed_mps", "brake", "throttle", "steer", "cross_track_error_m", "progress_m", "ttc_proxy_s", "drop_frac"],
+            key="exp_trace_signal",
+        )
+        fig = go.Figure()
+        for _, run in sel.iterrows():
+            clog = campaign_dir / "clog" / f"clog_{run['run_id']}.csv"
+            if not clog.exists():
+                continue
+            trace = pd.read_csv(clog, usecols=lambda c: c in ("t_s", signal_col))
+            if signal_col not in trace.columns:
+                continue
+            fig.add_scatter(x=trace["t_s"], y=pd.to_numeric(trace[signal_col], errors="coerce"), mode="lines",
+                            name=f"{run['arm']} ({run['termination_mode']})")
+        if fig.data:
+            fig.update_layout(template="plotly_white", xaxis_title="time (s)", yaxis_title=signal_col,
+                              margin=dict(l=20, r=20, t=30, b=20))
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.caption("No behaviour logs found for this situation.")
+
+    with st.expander("All runs"):
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+    if mev is not None and st.button("Save results to Evidence"):
+        payload = {
+            "campaign": str(campaign_dir),
+            "outcomes_per_arm": {f"{r['weather']}/{r['arm']}": {k: r[k] for k in table.columns if k not in group_cols}
+                                 for r in table.to_dict("records")},
+            "paired_vs_" + baseline: {r["arm"]: r for r in rows},
+            "metric": metric,
+        }
+        out = mev.artefact(OUTPUT_ANALYSIS / f"experiment_{campaign_dir.name}.json", json.loads(json.dumps(payload, default=float)),
+                           tool="app.py experiment", inputs=[campaign_dir / "campaign.json", campaign_dir / "runs"], quiet=True)
+        st.success(f"Written {out.name}; open it in the Evidence tab.")
+
+
+def experiment_page(toolkit_dir: Path | None, config: dict) -> None:
+    st.header("Experiment")
+    if toolkit_dir is None or not (toolkit_dir / "scripts" / "matsense_campaign.py").exists():
+        st.warning("The Experiment page needs the MatSense runtime toolkit. Check the Toolkit path in the sidebar.")
+        return
+    tab_campaign, tab_results = st.tabs(["Campaign", "Results"])
+    with tab_campaign:
+        experiment_campaign(toolkit_dir, config)
+    with tab_results:
+        experiment_results(toolkit_dir)
+
+
 def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
     st.header("Run Viewer")
     st.caption("CARLA must already be running with the target map.")
@@ -2156,12 +2665,14 @@ def evidence_browser() -> None:
 
 def main() -> None:
     toolkit_dir, config = sidebar_config()
-    tab_run, tab_profile, tab_analyzer, tab_evidence = st.tabs(
-        ["Run Viewer", "Profile", "Dataset Analyzer", "Evidence"])
+    tab_run, tab_profile, tab_experiment, tab_analyzer, tab_evidence = st.tabs(
+        ["Run Viewer", "Profile", "Experiment", "Dataset Analyzer", "Evidence"])
     with tab_run:
         run_viewer(toolkit_dir, config)
     with tab_profile:
         profile_browser(toolkit_dir)
+    with tab_experiment:
+        experiment_page(toolkit_dir, config)
     with tab_analyzer:
         dataset_analyzer(toolkit_dir, config)
     with tab_evidence:

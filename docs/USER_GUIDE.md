@@ -245,6 +245,60 @@ which is useful for the `swap_*` and `shuffled_*` control profiles.
 
 ---
 
+## 4c. Experiment
+
+The **Experiment** page runs closed-loop campaigns and compares sensing arms.
+It needs CARLA, the forked PCLA (with the `perturb_fn` hook) and, for scripted
+hazards, ScenarioRunner (`SCENARIO_RUNNER_ROOT`, `CARLA_PYTHONAPI_ROOT`).
+
+### Campaign
+
+Set the PCLA directory, the route XML, the agent, the town and optionally a
+ScenarioRunner hazard with its parameters. Then choose the design:
+
+```text
+Sensing arms   standard (CARLA's response) / global / matsense / shuffled / level
+Conditions     nominal / rain / snow (snow is not calibrated)
+Seeds          perturbation seeds, e.g. 1, 2, 3
+Replicates     repetitions of each cell
+```
+
+The page shows how many runs the design produces before you start it.
+**Start campaign** checks CARLA first, writes the plan to
+`output_campaigns/<name>/campaign.json` and runs it in the background, one run
+at a time, so the browser can be closed. **Stop** ends the current run cleanly
+(the recorder removes its actors from CARLA) and **Resume** runs only what has
+no `run_summary.json` yet.
+
+Each campaign folder contains:
+
+```text
+campaign.json                  the plan, one command per run
+status.json                    progress
+runs/<run>/run_summary.json    outcome of each run
+clog/clog_<run>.csv            one row per simulation tick
+logs/<run>.log                 recorder output, for failed runs
+```
+
+### Results
+
+- outcomes per arm and condition: runs, completions, collisions, stops, median
+  route completion and minimum TTC;
+- the share of completed runs per arm, and the distribution of the chosen
+  metric;
+- a paired comparison against a baseline arm, pairing runs on condition, seed
+  and replicate (mean difference, 95 % interval, Wilcoxon; Fisher for
+  completion);
+- run traces: the same situation under each arm, tick by tick;
+- **Save results to Evidence** writes the summary to `output_analysis/` with
+  its provenance.
+
+Runs that died inside the agent are counted separately and excluded, since
+they never drove. Summaries written less than 90 seconds ago are left out
+until they settle.
+
+---
+
 ## 5. Recording a Dataset
 
 To record a dataset:

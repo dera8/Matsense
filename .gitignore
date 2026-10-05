@@ -21,6 +21,7 @@ viewer_command.txt
 *.log
 nohup.out
 output_dataset/
+output_campaigns/
 bundled_toolkit/scripts/output_dataset/
 archivio_campagne/
 logs_*/
