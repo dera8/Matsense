@@ -6,6 +6,7 @@ import math
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -268,6 +269,14 @@ def load_tool_config(toolkit_dir: Path | None) -> dict:
 # pseudo-reflectance colormap; older launcher configs called it "pseudo",
 # which the viewer rejects at argument parsing.
 VIEW_MODE_ALIASES = {"pseudo": "global"}
+
+WEATHER_OPTIONS = ["nominal", "rain", "snow"]
+VIEW_OPTIONS = {
+    "camera_triple": "RGB overlays: all 3",
+    "material": "Material classes",
+    "global": "Pseudo-reflectance",
+    "intensity": "CARLA raw intensity",
+}
 
 # Conditions whose ratios are carried over rather than measured from real
 # recordings, whatever profile is selected.
@@ -838,6 +847,144 @@ def lidar_animation_figure(frames: list[pd.DataFrame], scenario: str, point_size
     return fig
 
 
+def toolkit_env(toolkit_dir: Path) -> dict:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(toolkit_dir / "src") + os.pathsep + env.get("PYTHONPATH", "")
+    return env
+
+
+# Runs in the same interpreter the viewer will use, so "import carla works"
+# here means it works for the viewer too.
+CARLA_PROBE = """
+import json, sys
+out = {}
+try:
+    import carla
+except Exception as exc:
+    out["import_error"] = f"{type(exc).__name__}: {exc}"
+    print(json.dumps(out)); sys.exit(0)
+out["module"] = getattr(carla, "__file__", "") or ""
+try:
+    client = carla.Client(sys.argv[1], int(sys.argv[2]))
+    client.set_timeout(5.0)
+    out["client_version"] = str(client.get_client_version())
+    out["server_version"] = str(client.get_server_version())
+    out["map"] = client.get_world().get_map().name.split("/")[-1]
+except Exception as exc:
+    out["server_error"] = f"{type(exc).__name__}: {exc}"
+print(json.dumps(out))
+"""
+
+
+def check_carla(toolkit_dir: Path, host: str, port: int) -> dict:
+    result = {"host": host, "port": int(port), "port_open": False}
+    try:
+        with socket.create_connection((host, int(port)), timeout=2.0):
+            result["port_open"] = True
+    except OSError as exc:
+        result["port_error"] = str(exc)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", CARLA_PROBE, host, str(port)],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            env=toolkit_env(toolkit_dir),
+        )
+        lines = [line for line in proc.stdout.splitlines() if line.startswith("{")]
+        if lines:
+            result.update(json.loads(lines[-1]))
+        else:
+            result["import_error"] = (proc.stderr or "no output from the probe").strip()[-500:]
+    except subprocess.TimeoutExpired:
+        result["server_error"] = "CARLA did not answer within 25 s."
+    if not result["port_open"]:
+        result.pop("server_error", None)
+    return result
+
+
+def preflight_blocker(preflight: dict, allow_version_mismatch: bool) -> str:
+    if "import_error" in preflight:
+        return (
+            f"`import carla` fails in {sys.executable}. Start Streamlit from the Python environment "
+            "where the CARLA wheel/egg is installed."
+        )
+    if not preflight["port_open"]:
+        return f"no CARLA server on {preflight['host']}:{preflight['port']}. Start CARLA first."
+    if "server_error" in preflight:
+        return f"CARLA is listening but did not answer: {preflight['server_error']}"
+    client, server = preflight.get("client_version"), preflight.get("server_version")
+    if client and server and client != server and not allow_version_mismatch:
+        return (
+            f"CARLA client {client} and server {server} differ; the viewer refuses to run on mismatched builds. "
+            "Use matching versions, or tick 'Allow client/server version mismatch' under CARLA connection."
+        )
+    return ""
+
+
+def render_preflight(preflight: dict, allow_version_mismatch: bool) -> None:
+    if "import_error" in preflight:
+        st.error(f"Python API: `import carla` fails in {sys.executable}")
+        st.code(preflight["import_error"], language="text")
+    else:
+        st.write(f"Python API: OK ({preflight.get('client_version', '?')})")
+    if not preflight["port_open"]:
+        st.error(f"Server: nothing listening on {preflight['host']}:{preflight['port']}")
+    elif "server_error" in preflight:
+        st.error(f"Server: {preflight['server_error']}")
+    elif "server_version" in preflight:
+        st.write(f"Server: {preflight['server_version']}, map **{preflight.get('map', '?')}**")
+    else:
+        st.write(f"Server: port {preflight['port']} open")
+    problem = preflight_blocker(preflight, allow_version_mismatch)
+    if problem:
+        st.warning(problem)
+    else:
+        st.success("Ready to start.")
+
+
+def viewer_pid() -> int | None:
+    if not PID_FILE.exists():
+        return None
+    try:
+        pid = int(PID_FILE.read_text(encoding="utf-8").strip())
+    except ValueError:
+        return None
+    if not process_alive(pid):
+        PID_FILE.unlink(missing_ok=True)
+        return None
+    return pid
+
+
+def process_alive(pid: int) -> bool:
+    if os.name == "nt":
+        # os.kill(pid, 0) would terminate the process on Windows.
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        exit_code = ctypes.c_ulong()
+        kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+        kernel32.CloseHandle(handle)
+        return exit_code.value == 259  # STILL_ACTIVE
+    try:
+        # The viewer is a child of this process: reap it if it has exited,
+        # otherwise it lingers as a zombie and still answers signal 0.
+        if os.waitpid(pid, os.WNOHANG)[0] == pid:
+            return False
+    except ChildProcessError:
+        pass
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def stop_viewer() -> str:
     if not PID_FILE.exists():
         return "No PID file found."
@@ -889,6 +1036,20 @@ def build_viewer_command(toolkit_dir: Path, config: dict, values: dict) -> list[
         "--save-start-delay-seconds", str(values["save_start_delay_seconds"]),
         "--strict-sync-timeout", str(values["strict_sync_timeout"]),
     ]
+    for flag, key in (
+        ("--channels", "channels"),
+        ("--pps", "pps"),
+        ("--rotation-frequency", "rotation_frequency"),
+        ("--lidar-range", "lidar_range"),
+        ("--upper-fov", "upper_fov"),
+        ("--lower-fov", "lower_fov"),
+    ):
+        if key in values:
+            cmd.extend([flag, str(values[key])])
+    if values.get("use_base_nominal"):
+        cmd.append("--use-base-nominal")
+    if values.get("allow_version_mismatch"):
+        cmd.append("--allow-version-mismatch")
     if values["profile_name"]:
         cmd.extend(["--profile-name", values["profile_name"]])
     if values["traj_txt"]:
@@ -1347,59 +1508,60 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
         )
 
     tool_config = load_tool_config(toolkit_dir)
+    profile_names = list(tool_config.get("profiles", {}))
+    presets = tool_config.get("launch_presets", {})
+
+    defaults = {
+        "rv_weather": str(config.get("weather", "nominal")),
+        "rv_mode": VIEW_MODE_ALIASES.get(str(config.get("mode", "camera_triple")), str(config.get("mode", "camera_triple"))),
+        "rv_norm": str(config.get("display_normalization", "fixed")),
+        "rv_pct": float(config.get("display_percentile", 95)),
+        "rv_scenario": "",
+        "rv_base_nominal": bool(config.get("use_base_nominal", False)),
+    }
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
+    if st.session_state["rv_weather"] not in WEATHER_OPTIONS:
+        st.session_state["rv_weather"] = "nominal"
+    if st.session_state["rv_mode"] not in VIEW_OPTIONS:
+        st.session_state["rv_mode"] = "camera_triple"
+    if st.session_state["rv_norm"] not in ("fixed", "percentile"):
+        st.session_state["rv_norm"] = "fixed"
+
+    def apply_preset() -> None:
+        preset = presets.get(st.session_state.get("rv_preset", ""), {})
+        if not preset:
+            return
+        if preset.get("weather") in WEATHER_OPTIONS:
+            st.session_state["rv_weather"] = preset["weather"]
+        mode_value = VIEW_MODE_ALIASES.get(str(preset.get("mode", "")), str(preset.get("mode", "")))
+        if mode_value in VIEW_OPTIONS:
+            st.session_state["rv_mode"] = mode_value
+        if preset.get("display_normalization") in ("fixed", "percentile"):
+            st.session_state["rv_norm"] = preset["display_normalization"]
+        if "display_percentile" in preset:
+            st.session_state["rv_pct"] = float(preset["display_percentile"])
+        if "scenario_name" in preset:
+            st.session_state["rv_scenario"] = str(preset["scenario_name"])
+        st.session_state["rv_base_nominal"] = bool(preset.get("use_base_nominal", False))
+
+    st.subheader("Run Settings")
+    if presets:
+        st.selectbox(
+            "Preset",
+            ["Custom"] + list(presets),
+            key="rv_preset",
+            on_change=apply_preset,
+            help="Fills weather, view and display settings. Everything stays editable below.",
+        )
 
     with st.form("viewer"):
         c1, c2, c3 = st.columns(3)
-        host = c1.text_input("Host", value=str(config.get("host", "127.0.0.1")))
-        port = c2.number_input("Port", value=int(config.get("port", 2000)), step=1)
-        tm_port = c3.number_input("Traffic Manager port", value=int(config.get("tm_port", 8000)), step=1)
-
-        c1, c2, c3 = st.columns(3)
-        width = c1.number_input("Width", value=int(config.get("width", 1600)), step=100)
-        height = c2.number_input("Height", value=int(config.get("height", 900)), step=100)
-        fps = c3.number_input("FPS", value=int(config.get("fps", 20)), step=1)
-
-        c1, c2, c3 = st.columns(3)
-        weather_options = ["nominal", "rain", "snow"]
-        weather_default = str(config.get("weather", "nominal"))
-        weather = c1.selectbox(
-            "Weather",
-            weather_options,
-            index=weather_options.index(weather_default) if weather_default in weather_options else 0,
-        )
-        view_options = {
-            "camera_triple": "RGB overlays: all 3",
-            "material": "Material classes",
-            "global": "Pseudo-reflectance",
-            "intensity": "CARLA raw intensity",
-        }
-        mode_keys = list(view_options.keys())
-        mode_default = str(config.get("mode", "camera_triple"))
-        mode_default = VIEW_MODE_ALIASES.get(mode_default, mode_default)
-        mode = c2.selectbox(
-            "View",
-            mode_keys,
-            index=mode_keys.index(mode_default) if mode_default in mode_keys else 0,
-            format_func=lambda key: view_options[key],
-        )
-        display_normalization = c3.selectbox("Pseudo scale", ["fixed", "percentile"], index=["fixed", "percentile"].index(config.get("display_normalization", "fixed")) if config.get("display_normalization") in ["fixed", "percentile"] else 0)
-
-        display_percentile = st.number_input("Display percentile", value=float(config.get("display_percentile", 95)), step=1.0)
-
-        c1, c2, c3 = st.columns(3)
-        scene_id = c1.text_input("Scene ID", value=str(config.get("scene_id", "scene_001")))
-        scenario_name = c2.text_input(
-            "Scenario name",
-            value="",
-            placeholder="same as Weather",
-            help="Folder the dataset is saved under. Leave empty to use the selected weather.",
-        )
-        save_every = c3.number_input("Save every N frames", value=int(config.get("save_every", 10)), min_value=1)
-
-        profile_names = list(tool_config.get("profiles", {}))
+        weather = c1.selectbox("Weather", WEATHER_OPTIONS, key="rv_weather")
+        mode = c2.selectbox("View", list(VIEW_OPTIONS), key="rv_mode", format_func=lambda key: VIEW_OPTIONS[key])
         profile_default = str(config.get("profile_name") or tool_config.get("default_profile") or "")
         if profile_names:
-            profile_name = st.selectbox(
+            profile_name = c3.selectbox(
                 "Material profile",
                 profile_names,
                 index=profile_names.index(profile_default) if profile_default in profile_names else 0,
@@ -1409,10 +1571,100 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
             profile_name = profile_default
 
         c1, c2, c3 = st.columns(3)
-        autopilot = c1.checkbox("Autopilot", value=bool(config.get("autopilot", False)))
+        autopilot = c1.checkbox(
+            "Autopilot",
+            value=bool(config.get("autopilot", False)),
+            help="CARLA drives the ego vehicle. Ignored when a trajectory is given.",
+        )
         save_dataset = c2.checkbox("Save dataset", value=bool(config.get("save_dataset", False)))
 
-        launch = st.form_submit_button("Start Viewer")
+        with st.expander("Recording"):
+            c1, c2, c3 = st.columns(3)
+            scene_id = c1.text_input("Scene ID", value=str(config.get("scene_id", "scene_001")))
+            scenario_name = c2.text_input(
+                "Scenario name",
+                key="rv_scenario",
+                placeholder="same as Weather",
+                help="Folder the dataset is saved under. Leave empty to use the selected weather.",
+            )
+            save_every = c3.number_input("Save every N frames", value=int(config.get("save_every", 10)), min_value=1)
+            c1, c2, c3 = st.columns(3)
+            max_save_frames = c1.number_input(
+                "Max saved frames", value=int(config.get("max_save_frames", 0)), min_value=0, help="0 = no limit."
+            )
+            save_start_delay = c2.number_input(
+                "Start saving after (s)", value=float(config.get("save_start_delay_seconds", 0.0)), min_value=0.0, step=0.5
+            )
+            strict_sync_timeout = c3.number_input(
+                "Sensor sync timeout (s)", value=float(config.get("strict_sync_timeout", 0.5)), min_value=0.0, step=0.1
+            )
+
+        with st.expander("Display"):
+            c1, c2, c3 = st.columns(3)
+            display_normalization = c1.selectbox("Pseudo scale", ["fixed", "percentile"], key="rv_norm")
+            display_percentile = c2.number_input("Display percentile", key="rv_pct", step=1.0)
+            use_base_nominal = c3.checkbox(
+                "Use nominal base values",
+                key="rv_base_nominal",
+                help="Use the profile's nominal base values directly instead of the raw-intensity-driven correction.",
+            )
+            c1, c2, c3 = st.columns(3)
+            width = c1.number_input("Width", value=int(config.get("width", 1600)), step=100)
+            height = c2.number_input("Height", value=int(config.get("height", 900)), step=100)
+            fps = c3.number_input("FPS", value=int(config.get("fps", 20)), step=1)
+
+        with st.expander("Trajectory and parked vehicles"):
+            c1, c2, c3 = st.columns(3)
+            follow_options = ["teleport", "control"]
+            follow_default = str(config.get("follow_mode", "teleport"))
+            follow_mode = c1.selectbox(
+                "Follow mode",
+                follow_options,
+                index=follow_options.index(follow_default) if follow_default in follow_options else 0,
+                help="teleport replays the poses exactly; control drives towards them.",
+            )
+            traj_step = c2.number_input("Trajectory step", value=int(config.get("traj_step", 5)), min_value=1)
+            control_smoothing = c3.number_input(
+                "Control smoothing", value=float(config.get("control_smoothing", 0.30)), min_value=0.0, max_value=1.0, step=0.05
+            )
+            c1, c2, c3 = st.columns(3)
+            utm_offset_x = c1.number_input(
+                "UTM offset X", value=float(config.get("utm_offset_x", 0.0)), format="%.2f",
+                help="Leave both at 0 to read the offset from the map's .xodr file.",
+            )
+            utm_offset_y = c2.number_input("UTM offset Y", value=float(config.get("utm_offset_y", 0.0)), format="%.2f")
+            traj_z_offset = c3.number_input("Trajectory Z offset", value=float(config.get("traj_z_offset", 0.5)), step=0.1)
+            c1, c2, c3 = st.columns(3)
+            parked_z_offset = c1.number_input("Parked Z offset", value=float(config.get("parked_z_offset", 0.15)), step=0.05)
+            parked_limit = c2.number_input(
+                "Max parked vehicles", value=int(config.get("parked_limit", 0)), min_value=0, help="0 = all."
+            )
+            seed = c3.number_input("Seed", value=int(config.get("seed", 42)), step=1)
+
+        with st.expander("LiDAR sensor"):
+            c1, c2, c3 = st.columns(3)
+            channels = c1.number_input("Channels", value=int(config.get("channels", 64)), min_value=1)
+            pps = c2.number_input("Points per second", value=int(config.get("pps", 1300000)), min_value=1000, step=100000)
+            rotation_frequency = c3.number_input(
+                "Rotation frequency (Hz)", value=float(config.get("rotation_frequency", 20.0)), min_value=1.0, step=1.0
+            )
+            c1, c2, c3 = st.columns(3)
+            lidar_range = c1.number_input("Range (m)", value=float(config.get("lidar_range", 80.0)), min_value=1.0)
+            upper_fov = c2.number_input("Upper FOV (deg)", value=float(config.get("upper_fov", 10.0)))
+            lower_fov = c3.number_input("Lower FOV (deg)", value=float(config.get("lower_fov", -30.0)))
+
+        with st.expander("CARLA connection"):
+            c1, c2, c3 = st.columns(3)
+            host = c1.text_input("Host", value=str(config.get("host", "127.0.0.1")))
+            port = c2.number_input("Port", value=int(config.get("port", 2000)), step=1)
+            tm_port = c3.number_input("Traffic Manager port", value=int(config.get("tm_port", 8000)), step=1)
+            allow_version_mismatch = st.checkbox(
+                "Allow client/server version mismatch",
+                value=bool(config.get("allow_version_mismatch", False)),
+                help="The viewer refuses to start on a mismatch, because mismatched builds can crash natively.",
+            )
+
+        launch = st.form_submit_button("Start Viewer", type="primary")
 
     if weather in UNMEASURED_CONDITIONS:
         st.warning(UNMEASURED_CONDITIONS[weather])
@@ -1421,16 +1673,17 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
         st.caption(f"Profile `{profile_name}` carries no calibration notes: treat its coefficients as declared, not measured.")
 
     values = {
-        "host": host,
-        "port": port,
-        "tm_port": tm_port,
-        "width": width,
-        "height": height,
-        "fps": fps,
+        "host": host.strip(),
+        "port": int(port),
+        "tm_port": int(tm_port),
+        "width": int(width),
+        "height": int(height),
+        "fps": int(fps),
         "weather": weather,
         "mode": mode,
         "display_normalization": display_normalization,
         "display_percentile": display_percentile,
+        "use_base_nominal": use_base_nominal,
         "traj_txt": traj_txt.strip(),
         "traj_json": traj_json.strip(),
         "parked_json": parked_json.strip(),
@@ -1439,30 +1692,31 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
         "scenario_name": scenario_name.strip() or weather,
         "autopilot": autopilot,
         "save_dataset": save_dataset,
-        "save_every": save_every,
+        "save_every": int(save_every),
         "profile_name": profile_name,
-        "traj_step": str(config.get("traj_step", 5)),
-        "utm_offset_x": str(config.get("utm_offset_x", 0.0)),
-        "utm_offset_y": str(config.get("utm_offset_y", 0.0)),
-        "traj_z_offset": str(config.get("traj_z_offset", 0.5)),
-        "follow_mode": str(config.get("follow_mode", "teleport")),
-        "control_smoothing": str(config.get("control_smoothing", 0.30)),
-        "parked_z_offset": str(config.get("parked_z_offset", 0.15)),
-        "parked_limit": str(config.get("parked_limit", 0)),
-        "seed": str(config.get("seed", 42)),
-        "max_save_frames": str(config.get("max_save_frames", 0)),
-        "save_start_delay_seconds": str(config.get("save_start_delay_seconds", 0.0)),
-        "strict_sync_timeout": str(config.get("strict_sync_timeout", 0.5)),
+        "traj_step": int(traj_step),
+        "utm_offset_x": f"{utm_offset_x:.2f}",
+        "utm_offset_y": f"{utm_offset_y:.2f}",
+        "traj_z_offset": traj_z_offset,
+        "follow_mode": follow_mode,
+        "control_smoothing": control_smoothing,
+        "parked_z_offset": parked_z_offset,
+        "parked_limit": int(parked_limit),
+        "seed": int(seed),
+        "max_save_frames": int(max_save_frames),
+        "save_start_delay_seconds": save_start_delay,
+        "strict_sync_timeout": strict_sync_timeout,
+        "channels": int(channels),
+        "pps": int(pps),
+        "rotation_frequency": rotation_frequency,
+        "lidar_range": lidar_range,
+        "upper_fov": upper_fov,
+        "lower_fov": lower_fov,
+        "allow_version_mismatch": allow_version_mismatch,
     }
 
     if trajectory_txt_looks_like_utm(values["traj_txt"]):
-        try:
-            offset_x = float(values["utm_offset_x"])
-            offset_y = float(values["utm_offset_y"])
-        except ValueError:
-            offset_x = 0.0
-            offset_y = 0.0
-        if abs(offset_x) < 1e-9 and abs(offset_y) < 1e-9:
+        if abs(utm_offset_x) < 1e-9 and abs(utm_offset_y) < 1e-9:
             detected_offset = read_xodr_offset(values["traj_txt"], toolkit_dir)
             if detected_offset is not None:
                 x, y, source = detected_offset
@@ -1470,50 +1724,70 @@ def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
                 values["utm_offset_y"] = f"{y:.2f}"
                 st.info(f"Auto-loaded UTM offsets from {source}: x={x:.2f}, y={y:.2f}")
 
+    st.subheader("CARLA Status")
+    status_c1, status_c2 = st.columns([1, 4])
+    if status_c1.button("Check CARLA"):
+        st.session_state["rv_preflight"] = check_carla(toolkit_dir, values["host"], values["port"])
+    preflight = st.session_state.get("rv_preflight")
+    if preflight and (preflight["host"], preflight["port"]) == (values["host"], values["port"]):
+        with status_c2:
+            render_preflight(preflight, values["allow_version_mismatch"])
+    else:
+        status_c2.caption("Not checked yet. Start Viewer runs the same check before launching.")
+
     if launch:
-        script = toolkit_dir / "scripts" / "carla_pygame_lidar_dataset_recorder_friendly.py"
-        if not script.exists():
-            st.error(f"Viewer script not found: {script}")
-            return
-        cmd = build_viewer_command(toolkit_dir, config, values)
-        rendered_cmd = " ".join(f'"{part}"' if " " in str(part) else str(part) for part in cmd)
-        VIEWER_COMMAND.write_text(rendered_cmd, encoding="utf-8")
-        env = os.environ.copy()
-        src_path = str(toolkit_dir / "src")
-        env["PYTHONPATH"] = src_path + os.pathsep + env.get("PYTHONPATH", "")
-        creationflags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
-        stdout_file = VIEWER_STDOUT.open("w", encoding="utf-8")
-        stderr_file = VIEWER_STDERR.open("w", encoding="utf-8")
-        try:
-            process = subprocess.Popen(
-                cmd,
-                cwd=str(toolkit_dir / "scripts"),
-                env=env,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                creationflags=creationflags,
-            )
-        finally:
-            stdout_file.close()
-            stderr_file.close()
-        PID_FILE.write_text(str(process.pid), encoding="utf-8")
-        time.sleep(1.0)
-        exit_code = process.poll()
-        if exit_code is None:
-            st.success(f"Viewer started with PID {process.pid}.")
+        preflight = check_carla(toolkit_dir, values["host"], values["port"])
+        st.session_state["rv_preflight"] = preflight
+        problem = preflight_blocker(preflight, values["allow_version_mismatch"])
+        if problem:
+            st.error(f"Viewer not started: {problem}")
         else:
-            st.error(f"Viewer exited immediately with code {exit_code}.")
-            if VIEWER_STDERR.exists():
-                st.code(VIEWER_STDERR.read_text(encoding="utf-8", errors="replace")[-4000:], language="text")
-        with st.expander("Command"):
-            st.code(rendered_cmd, language="powershell")
+            start_viewer(toolkit_dir, config, values)
+
+    running_pid = viewer_pid()
+    if running_pid is not None:
+        st.success(f"Viewer running (PID {running_pid}). Close the pygame window or press Stop Viewer to end it.")
 
     if VIEWER_STDERR.exists() and VIEWER_STDERR.stat().st_size > 0:
         with st.expander("Last viewer stderr"):
             st.code(VIEWER_STDERR.read_text(encoding="utf-8", errors="replace")[-4000:], language="text")
 
-    if st.button("Stop Viewer"):
+    if st.button("Stop Viewer", disabled=running_pid is None):
         st.info(stop_viewer())
+        st.rerun()
+
+
+def start_viewer(toolkit_dir: Path, config: dict, values: dict) -> None:
+    cmd = build_viewer_command(toolkit_dir, config, values)
+    rendered_cmd = " ".join(f'"{part}"' if " " in str(part) else str(part) for part in cmd)
+    VIEWER_COMMAND.write_text(rendered_cmd, encoding="utf-8")
+    creationflags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
+    stdout_file = VIEWER_STDOUT.open("w", encoding="utf-8")
+    stderr_file = VIEWER_STDERR.open("w", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            cmd,
+            cwd=str(toolkit_dir / "scripts"),
+            env=toolkit_env(toolkit_dir),
+            stdout=stdout_file,
+            stderr=stderr_file,
+            creationflags=creationflags,
+        )
+    finally:
+        stdout_file.close()
+        stderr_file.close()
+    PID_FILE.write_text(str(process.pid), encoding="utf-8")
+    time.sleep(1.0)
+    exit_code = process.poll()
+    if exit_code is None:
+        st.success(f"Viewer started with PID {process.pid}.")
+    else:
+        PID_FILE.unlink(missing_ok=True)
+        st.error(f"Viewer exited immediately with code {exit_code}.")
+        if VIEWER_STDERR.exists():
+            st.code(VIEWER_STDERR.read_text(encoding="utf-8", errors="replace")[-4000:], language="text")
+    with st.expander("Command"):
+        st.code(rendered_cmd, language="powershell")
 
 
 def _artefact_rows() -> pd.DataFrame:

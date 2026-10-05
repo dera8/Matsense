@@ -164,58 +164,52 @@ You can leave trajectory fields empty and enable **Autopilot** if no trajectory 
 
 ### Viewer Settings
 
-Common settings:
+Start from a **Preset** (`Nominal demo`, `Rain demo`, `Snow demo`): it fills
+weather, view, display scale and scenario name. Everything stays editable, and
+`Custom` keeps your own values.
+
+The main settings are always visible:
 
 ```text
-Weather          nominal / rain / snow
+Weather          nominal / rain / snow (snow is not calibrated)
 View             RGB overlays / Material classes / Pseudo-reflectance / CARLA raw intensity
-Pseudo scale     fixed / percentile
 Material profile realbag_empirical_v4 (calibrated default) or another profile in the tool config
-Scene ID         scene_001
-Scenario         nominal / rain / snow
+Autopilot        CARLA drives when no trajectory is given
+Save dataset     record frames, clouds and labels
 ```
 
-Use:
+Less common settings are grouped in collapsible sections:
 
 ```text
-View = Material classes
+Recording                       scene ID, scenario name (empty = same as Weather), save every N frames,
+                                max saved frames, start delay, sensor sync timeout
+Display                         pseudo scale, display percentile, nominal base values, window size, FPS
+Trajectory and parked vehicles  follow mode, trajectory step, control smoothing, UTM offsets
+                                (0/0 = read from the map's .xodr), Z offsets, max parked vehicles, seed
+LiDAR sensor                    channels, points per second, rotation frequency, range, vertical FOV
+CARLA connection                host, port, Traffic Manager port, allow version mismatch
 ```
 
-to inspect semantic material labels.
+Use `View = Material classes` to inspect semantic material labels,
+`View = Pseudo-reflectance` to inspect the material- and weather-aware response,
+and `View = CARLA raw intensity` to inspect CARLA's own LiDAR intensity.
 
-Use:
+### CARLA Status
 
-```text
-View = Pseudo-reflectance
-```
+**Check CARLA** tells you, before launching anything:
 
-to inspect material- and weather-aware pseudo-reflectance.
+- whether `import carla` works in the Python running the dashboard (the viewer uses the same one);
+- whether a CARLA server answers on the configured host and port;
+- the client and server versions, and the map currently loaded.
 
-Use:
-
-```text
-View = CARLA raw intensity
-```
-
-to inspect the raw CARLA LiDAR intensity.
+**Start Viewer** runs the same check and does not launch the viewer if CARLA
+cannot be imported, the server is not reachable, or client and server versions
+differ (unless the mismatch is explicitly allowed).
 
 ### Start and Stop
 
-Click:
-
-```text
-Start Viewer
-```
-
-to open the pygame viewer.
-
-Click:
-
-```text
-Stop Viewer
-```
-
-to stop the last viewer process launched by the dashboard.
+Click **Start Viewer** to open the pygame viewer. While it runs, the page shows
+its PID. Click **Stop Viewer** to stop the last viewer launched by the dashboard.
 
 ---
 
