@@ -224,6 +224,27 @@ its PID. Click **Stop Viewer** to stop the last viewer launched by the dashboard
 
 ---
 
+## 4b. Profile
+
+The **Profile** page shows what a material profile contains, without opening
+the JSON:
+
+- **Coefficients**: per material, the nominal response `beta`, the condition
+  ratios `alpha` (rain, snow) and whether the material is *measured* from real
+  recordings or *declared* as a fallback. Declared bars are hatched.
+- **Applied factor**: the factor actually multiplied into CARLA's intensity,
+  `beta x alpha` divided by its maximum over the measured materials for that
+  condition. It is computed the same way as the runtime operator.
+- **Semantic mapping**: which CARLA semantic classes map to which material, and
+  which fall back to the default material. The many-to-one table shows where
+  several CARLA classes share one coefficient.
+- **Notes**: the calibration notes stored in the profile, and the raw JSON.
+
+**Compare with** puts a second profile next to the first, with the differences,
+which is useful for the `swap_*` and `shuffled_*` control profiles.
+
+---
+
 ## 5. Recording a Dataset
 
 To record a dataset:

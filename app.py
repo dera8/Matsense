@@ -1133,7 +1133,7 @@ def path_browser(label: str, default: str, key: str, kind: str, suffixes: tuple[
             root.destroy()
         return selected
 
-    c1, c2 = st.columns([5, 1])
+    c1, c2 = st.columns([3, 1], vertical_alignment="bottom")
     c1.text_input(label, key=input_key)
     if c2.button("Browse", key=f"{key}_browse"):
         selected = choose_path()
@@ -1500,6 +1500,187 @@ def dataset_analyzer(toolkit_dir: Path | None, config: dict) -> None:
             )
             scatter.update_layout(template="plotly_white", title_font_color="#073B4C", margin=dict(l=20, r=20, t=60, b=20))
             st.plotly_chart(scatter, use_container_width=True)
+
+
+# CARLA 0.9.14+ semantic tags (the CityScapes-aligned set CARLA 0.9.16 uses).
+CARLA_SEMANTIC_TAGS = {
+    0: "Unlabeled", 1: "Roads", 2: "SideWalks", 3: "Building", 4: "Wall", 5: "Fence", 6: "Pole",
+    7: "TrafficLight", 8: "TrafficSign", 9: "Vegetation", 10: "Terrain", 11: "Sky", 12: "Pedestrian",
+    13: "Rider", 14: "Car", 15: "Truck", 16: "Bus", 17: "Train", 18: "Motorcycle", 19: "Bicycle",
+    20: "Static", 21: "Dynamic", 22: "Other", 23: "Water", 24: "RoadLine", 25: "Ground", 26: "Bridge",
+    27: "RailTrack", 28: "GuardRail",
+}
+
+
+def profile_table(profile: dict) -> pd.DataFrame:
+    """One row per material: beta, alpha per condition, and the factor the
+    operator applies, phi / phi_max with phi_max over the measured classes
+    (Eq. 8 of the paper, as matsense_closedloop.build_profile computes it)."""
+    nominal_base = profile.get("nominal_base", {})
+    weather_ratio = profile.get("weather_ratio", {})
+    default_material = profile.get("default_material", "unknown")
+    measured = set(profile.get("measured_materials") or nominal_base)
+    materials = sorted(set(nominal_base) | set(profile.get("semantic_to_material", {}).values()) | {default_material})
+    conditions = list(weather_ratio) or ["nominal"]
+
+    def base(m: str) -> float:
+        return float(nominal_base.get(m, nominal_base.get(default_material, float("nan"))))
+
+    def ratio(m: str, w: str) -> float:
+        lut = weather_ratio.get(w, {})
+        return float(lut.get(m, lut.get(default_material, 1.0)))
+
+    phi_max = {}
+    for w in conditions:
+        pool = [m for m in materials if m in measured] or materials
+        phi_max[w] = max(base(m) * ratio(m, w) for m in pool)
+
+    rows = []
+    for m in materials:
+        row = {"material": m, "status": "measured" if m in measured else "declared", "beta": base(m)}
+        for w in conditions:
+            if w != "nominal":
+                row[f"alpha_{w}"] = ratio(m, w)
+        for w in conditions:
+            row[f"factor_{w}"] = base(m) * ratio(m, w) / phi_max[w] if phi_max[w] else float("nan")
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def semantic_mapping_table(profile: dict) -> pd.DataFrame:
+    mapping = {int(k): str(v) for k, v in profile.get("semantic_to_material", {}).items()}
+    default_material = profile.get("default_material", "unknown")
+    rows = []
+    for tag, name in CARLA_SEMANTIC_TAGS.items():
+        rows.append({
+            "tag": tag,
+            "CARLA class": name,
+            "material": mapping.get(tag, default_material),
+            "mapping": "mapped" if tag in mapping else f"fallback ({default_material})",
+        })
+    for tag in sorted(set(mapping) - set(CARLA_SEMANTIC_TAGS)):
+        rows.append({"tag": tag, "CARLA class": "?", "material": mapping[tag], "mapping": "mapped"})
+    return pd.DataFrame(rows)
+
+
+def profile_browser(toolkit_dir: Path | None) -> None:
+    st.header("Profile")
+    st.caption(
+        "The frozen material profile the runtime applies: nominal response per material (beta), "
+        "condition ratios (alpha), the factor that reaches CARLA's intensity, and how CARLA's classes map onto materials."
+    )
+    tool_config = load_tool_config(toolkit_dir)
+    profiles = tool_config.get("profiles", {})
+    if not profiles:
+        st.warning("No profiles found. Check the Toolkit path in the sidebar.")
+        return
+    names = list(profiles)
+    default_name = str(tool_config.get("default_profile") or names[0])
+    c1, c2 = st.columns(2)
+    name = c1.selectbox("Profile", names, index=names.index(default_name) if default_name in names else 0, key="pf_name")
+    compare = c2.selectbox("Compare with", ["(none)"] + [n for n in names if n != name], key="pf_compare")
+    profile = profiles[name]
+
+    table = profile_table(profile)
+    measured = table[table["status"] == "measured"]["material"].tolist()
+    declared = table[table["status"] == "declared"]["material"].tolist()
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Measured materials", len(measured))
+    m2.metric("Declared materials", len(declared))
+    m3.metric("Mapped CARLA tags", len(profile.get("semantic_to_material", {})))
+    if name == default_name:
+        st.caption(f"`{name}` is the tool config's default profile.")
+    if not profile.get("notes"):
+        st.warning(f"`{name}` has no calibration notes: its coefficients are declared, not measured.")
+    elif "measured_materials" not in profile:
+        st.info("This profile does not list its measured materials, so every material is shown as measured.")
+    if declared:
+        st.caption("Declared: " + ", ".join(declared) + ". These are fallback values, not estimates from recordings.")
+    for condition, message in UNMEASURED_CONDITIONS.items():
+        if f"alpha_{condition}" in table.columns:
+            st.caption(message)
+
+    tab_coeff, tab_factor, tab_mapping, tab_notes = st.tabs(
+        ["Coefficients", "Applied factor", "Semantic mapping", "Notes"]
+    )
+
+    with tab_coeff:
+        shown = table.drop(columns=[c for c in table.columns if c.startswith("factor_")])
+        if compare != "(none)":
+            other = profile_table(profiles[compare]).set_index("material")
+            shown = shown.set_index("material")
+            for col in [c for c in shown.columns if c == "beta" or c.startswith("alpha_")]:
+                if col in other.columns:
+                    shown[f"{col} ({compare})"] = other[col]
+                    shown[f"delta {col}"] = shown[col] - other[col]
+            shown = shown.reset_index()
+        st.dataframe(shown.round(4), use_container_width=True, hide_index=True)
+
+        fig = go.Figure()
+        fig.add_bar(
+            x=table["material"],
+            y=table["beta"],
+            name=name,
+            marker_color=[MATERIAL_COLORS.get(m, "#118AB2") for m in table["material"]],
+            marker_pattern_shape=["" if s == "measured" else "/" for s in table["status"]],
+            text=table["status"],
+        )
+        if compare != "(none)":
+            other_table = profile_table(profiles[compare])
+            fig.add_bar(x=other_table["material"], y=other_table["beta"], name=compare, marker_color="#B0B7C3")
+        fig.update_layout(
+            template="plotly_white",
+            title="Nominal response per material (beta); hatched bars are declared",
+            barmode="group",
+            yaxis_title="beta",
+            margin=dict(l=20, r=20, t=60, b=20),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+    with tab_factor:
+        st.caption(
+            "Factor multiplied into CARLA's intensity per return: beta x alpha, divided by its maximum over the "
+            "measured materials for that condition. The strongest measured class gets 1.0; nothing measured exceeds it."
+        )
+        factor_cols = [c for c in table.columns if c.startswith("factor_")]
+        long = table.melt(id_vars=["material", "status"], value_vars=factor_cols, var_name="condition", value_name="factor")
+        long["condition"] = long["condition"].str.replace("factor_", "", regex=False)
+        fig = px.bar(
+            long,
+            x="material",
+            y="factor",
+            color="condition",
+            barmode="group",
+            color_discrete_map=SCENARIO_COLORS,
+            hover_data=["status"],
+        )
+        fig.update_layout(template="plotly_white", legend_title_text="", margin=dict(l=20, r=20, t=30, b=20))
+        st.plotly_chart(fig, use_container_width=True)
+        st.dataframe(
+            table[["material", "status"] + factor_cols].round(4), use_container_width=True, hide_index=True
+        )
+
+    with tab_mapping:
+        mapping = semantic_mapping_table(profile)
+        only_mapped = st.checkbox("Only mapped CARLA classes", value=True, key="pf_only_mapped")
+        view = mapping[mapping["mapping"] == "mapped"] if only_mapped else mapping
+        st.dataframe(view, use_container_width=True, hide_index=True)
+        grouped = (
+            mapping[mapping["mapping"] == "mapped"].groupby("material")["CARLA class"].apply(lambda v: ", ".join(v)).reset_index()
+        )
+        grouped["beta"] = grouped["material"].map(dict(zip(table["material"], table["beta"])))
+        st.markdown("**Many-to-one: CARLA classes sharing one coefficient**")
+        st.dataframe(grouped.round(4), use_container_width=True, hide_index=True)
+        st.caption(
+            "Classes not listed above fall back to the default material "
+            f"`{profile.get('default_material', 'unknown')}`. Runtime logs count these returns as unmapped."
+        )
+
+    with tab_notes:
+        notes = str(profile.get("notes", "")).strip()
+        st.write(notes or "No notes in this profile.")
+        with st.expander("Raw profile JSON"):
+            st.json(profile)
 
 
 def run_viewer(toolkit_dir: Path | None, config: dict) -> None:
@@ -1975,10 +2156,12 @@ def evidence_browser() -> None:
 
 def main() -> None:
     toolkit_dir, config = sidebar_config()
-    tab_run, tab_analyzer, tab_evidence = st.tabs(
-        ["Run Viewer", "Dataset Analyzer", "Evidence"])
+    tab_run, tab_profile, tab_analyzer, tab_evidence = st.tabs(
+        ["Run Viewer", "Profile", "Dataset Analyzer", "Evidence"])
     with tab_run:
         run_viewer(toolkit_dir, config)
+    with tab_profile:
+        profile_browser(toolkit_dir)
     with tab_analyzer:
         dataset_analyzer(toolkit_dir, config)
     with tab_evidence:
