@@ -253,7 +253,8 @@ hazards, ScenarioRunner (`SCENARIO_RUNNER_ROOT`, `CARLA_PYTHONAPI_ROOT`).
 
 ### Campaign
 
-Set the PCLA directory, the route XML, the agent, the town and optionally a
+Set the PCLA directory, the route XML, the agent (default `lav_lav`, the
+original LAV; LAV needs CARLA started with `-vulkan`), the town and optionally a
 ScenarioRunner hazard with its parameters. Then choose the design:
 
 ```text

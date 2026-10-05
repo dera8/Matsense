@@ -1849,7 +1849,12 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
     with st.form("campaign"):
         c1, c2, c3 = st.columns(3)
         name = c1.text_input("Campaign name", value=time.strftime("campaign_%Y%m%d_%H%M"))
-        agent = c2.text_input("PCLA agent", value="tfv4_l6_0", help="Agent name as PCLA knows it, e.g. tfv4_l6_0.")
+        agent = c2.text_input(
+            "PCLA agent",
+            value="lav_lav",
+            help="Agent name as PCLA knows it: lav_lav (original LAV), lav_fast, tfv4_l6_0, ... "
+            "LAV needs CARLA started with -vulkan.",
+        )
         profile = c3.selectbox(
             "Material profile", profile_names,
             index=profile_names.index(default_profile) if default_profile in profile_names else 0,
@@ -1916,6 +1921,8 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
     for condition in conditions:
         if condition in UNMEASURED_CONDITIONS:
             st.warning(UNMEASURED_CONDITIONS[condition])
+    if agent.strip().startswith(("lav_", "lbc_", "wor_")):
+        st.caption("This agent family needs CARLA started with the -vulkan flag.")
     if "nominal" in conditions and set(arms) & {"global", "matsense", "shuffled"}:
         st.caption(
             "Under nominal conditions every alpha is 1, so no return is dropped or moved: "
