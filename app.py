@@ -1755,6 +1755,53 @@ def pcla_hook_problem(pcla_dir: str) -> str:
     return ""
 
 
+CARLA_LOAD_MAP = """
+import json, sys
+import carla
+client = carla.Client(sys.argv[1], int(sys.argv[2]))
+client.set_timeout(float(sys.argv[4]))
+world = client.load_world(sys.argv[3])
+print(json.dumps({"map": world.get_map().name.split("/")[-1]}))
+"""
+
+
+def same_town(a: str, b: str) -> bool:
+    norm = lambda t: t.lower().replace("_opt", "").strip()  # noqa: E731
+    return norm(a) == norm(b)
+
+
+def ensure_town(toolkit_dir: Path, preflight: dict, town: str, timeout_s: float = 600.0) -> str:
+    """Make CARLA show `town`, loading it if another map is open. "" on success.
+
+    The recorder would switch maps itself, but with a 60 s limit that the
+    Unreal editor regularly exceeds the first time a map compiles its shaders.
+    Loading it here, once, with a long limit, means every run finds the right
+    map already open and skips the switch.
+    """
+    current = str(preflight.get("map") or "")
+    if not town or not current or same_town(current, town):
+        return ""
+    with st.spinner(f"CARLA has {current} open: loading {town}. In the editor this can take several minutes…"):
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", CARLA_LOAD_MAP, preflight["host"], str(preflight["port"]), town, str(timeout_s)],
+                capture_output=True, text=True, timeout=timeout_s + 60, env=toolkit_env(toolkit_dir),
+            )
+            lines = [line for line in proc.stdout.splitlines() if line.startswith("{")]
+            loaded = json.loads(lines[-1])["map"] if lines else ""
+            error = (proc.stderr or "").strip().splitlines()[-1:] if not lines else []
+        except subprocess.TimeoutExpired:
+            loaded, error = "", ["no answer from CARLA"]
+    if loaded and same_town(loaded, town):
+        st.success(f"{town} loaded in CARLA.")
+        return ""
+    return (
+        f"CARLA could not switch from {current} to {town} ({' '.join(error) or 'unknown error'}). "
+        f"Open {town} in CARLA yourself (in the editor: stop Play, open Content > Carla > Maps > {town}, press Play) "
+        "and start again."
+    )
+
+
 def build_campaign_plan(toolkit_dir: Path, campaign_dir: Path, c: dict) -> dict:
     script = toolkit_dir / "scripts" / "carla_pygame_lidar_dataset_recorder_friendly.py"
     material_config = toolkit_dir / "configs" / "material_aware_tool_config.json"
@@ -1976,7 +2023,9 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
             problems.append(f"a campaign named {campaign_dir.name} already exists; resume it below or choose another name")
         if not problems:
             preflight = check_carla(toolkit_dir, host.strip(), int(port))
-            blocker = preflight_blocker(preflight, allow_version_mismatch)
+            blocker = preflight_blocker(preflight, allow_version_mismatch) or ensure_town(
+                toolkit_dir, preflight, town.strip()
+            )
             if blocker:
                 problems.append(blocker)
         if problems:
@@ -2027,7 +2076,9 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
     running = state == "running"
     if b1.button("Resume", disabled=running or done >= total, help="Runs only what has no summary yet."):
         preflight = check_carla(toolkit_dir, plan["settings"]["host"], plan["settings"]["port"])
-        blocker = preflight_blocker(preflight, plan["settings"].get("allow_version_mismatch", False))
+        blocker = preflight_blocker(preflight, plan["settings"].get("allow_version_mismatch", False)) or ensure_town(
+            toolkit_dir, preflight, plan["settings"].get("town", "")
+        )
         if blocker:
             st.error(f"Not resumed: {blocker}")
         else:

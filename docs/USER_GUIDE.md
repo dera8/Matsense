@@ -265,10 +265,11 @@ PCLA gains an optional `perturb_fn=None` and calls it on every LiDAR cloud
 before the agent sees it. Without it PCLA behaves exactly as before. The
 Experiment page refuses to start a campaign on an unpatched PCLA.
 
-When CARLA runs inside the Unreal editor (`make launch`), open the campaign's
-town (for example `Content/Carla/Maps/Town02`) before pressing Play: the
-recorder only loads a map when the one already open differs, and loading maps
-from the client is unreliable in the editor.
+If CARLA has another map open, **Start campaign** and **Resume** load the
+campaign's town first, allowing up to ten minutes: in the Unreal editor the
+first load of a map compiles its shaders and takes far longer than the
+recorder's own 60 s limit. If the editor refuses the switch, the page says so;
+then stop Play, open the town from `Content > Carla > Maps` and press Play.
 
 ### Campaign
 
