@@ -1728,6 +1728,33 @@ def load_toolkit_module(toolkit_dir: Path | None, name: str):
         return None
 
 
+PCLA_PATCH = BUNDLED_TOOLKIT / "patches" / "pcla_perturb_fn.patch"
+
+
+def pcla_hook_problem(pcla_dir: str) -> str:
+    """Why this PCLA cannot carry MatSense, or "" if it can.
+
+    MatSense reaches the agent's LiDAR through a perturb_fn argument that the
+    official PCLA does not have; without it every run dies on a TypeError
+    before the first tick.
+    """
+    if not pcla_dir:
+        return ""
+    pcla_py = Path(pcla_dir) / "PCLA.py"
+    if not pcla_py.is_file():
+        return f"no PCLA.py in {pcla_dir}"
+    try:
+        text = pcla_py.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"cannot read {pcla_py}: {exc}"
+    if "perturb_fn" not in text:
+        return (
+            "this PCLA has no perturb_fn hook, so MatSense cannot reach the agent's LiDAR. "
+            f'Apply the bundled patch from the PCLA folder: git apply "{PCLA_PATCH}"'
+        )
+    return ""
+
+
 def build_campaign_plan(toolkit_dir: Path, campaign_dir: Path, c: dict) -> dict:
     script = toolkit_dir / "scripts" / "carla_pygame_lidar_dataset_recorder_friendly.py"
     material_config = toolkit_dir / "configs" / "material_aware_tool_config.json"
@@ -1845,6 +1872,9 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
         pcla_dir = path_browser("PCLA directory (forked, with the perturb_fn hook)", "", "exp_pcla_dir", "directory")
     with c2:
         route = path_browser("Route XML", "", "exp_route", "file", (".xml",))
+    hook_problem = pcla_hook_problem(pcla_dir.strip())
+    if hook_problem:
+        st.error(f"PCLA: {hook_problem}")
 
     with st.form("campaign"):
         c1, c2, c3 = st.columns(3)
@@ -1937,6 +1967,8 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
             problems.append("give the PCLA agent name")
         if pcla_dir and not Path(pcla_dir).is_dir():
             problems.append(f"PCLA directory not found: {pcla_dir}")
+        elif hook_problem:
+            problems.append(hook_problem)
         if route and not Path(route).is_file():
             problems.append(f"route file not found: {route}")
         campaign_dir = CAMPAIGN_ROOT / (re.sub(r"[^A-Za-z0-9_-]+", "-", name.strip()).strip("-") or "campaign")

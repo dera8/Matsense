@@ -1,0 +1,51 @@
+diff --git a/PCLA.py b/PCLA.py
+index c921024..e6c2527 100644
+--- a/PCLA.py
++++ b/PCLA.py
+@@ -33,7 +33,10 @@ from leaderboard_codes.route_manipulation import interpolate_trajectory
+ from leaderboard_codes.sensor_interface import CallBack, OpenDriveMapReader, SpeedometerReader
+ 
+ class PCLA():
+-    def __init__(self, agent, vehicle, route, client):
++    def __init__(self, agent, vehicle, route, client, perturb_fn=None):
++        # Optional hook applied to every LiDAR cloud before the agent sees it:
++        # (points[N,4] float32, frame) -> points[M,4]. None leaves PCLA unchanged.
++        self.perturb_fn = perturb_fn
+         self.current_dir = os.path.dirname(os.path.abspath(__file__))
+         self.client = None
+         self.world = None
+@@ -130,7 +133,8 @@ class PCLA():
+                 sensor_transform = carla.Transform(sensor_location, sensor_rotation)
+                 sensor = self.world.spawn_actor(bp_setup, sensor_transform, self.vehicle)
+             # Register callback
+-            sensor.listen(CallBack(sensor_spec['id'], sensor_spec['type'], sensor, self.agent_instance.sensor_interface))
++            sensor.listen(CallBack(sensor_spec['id'], sensor_spec['type'], sensor, self.agent_instance.sensor_interface,
++                                   perturb_fn=self.perturb_fn))
+ 
+         # Ensure sensors are created in the world
+         self.world.tick()
+diff --git a/leaderboard_codes/sensor_interface.py b/leaderboard_codes/sensor_interface.py
+index 6fc0ac4..e57ef13 100644
+--- a/leaderboard_codes/sensor_interface.py
++++ b/leaderboard_codes/sensor_interface.py
+@@ -139,9 +139,10 @@ class OpenDriveMapReader(BaseReader):
+ 
+ 
+ class CallBack(object):
+-    def __init__(self, tag, sensor_type, sensor, data_provider):
++    def __init__(self, tag, sensor_type, sensor, data_provider, perturb_fn=None):
+         self._tag = tag
+         self._data_provider = data_provider
++        self._perturb_fn = perturb_fn
+ 
+         self._data_provider.register_sensor(tag, sensor_type, sensor)
+ 
+@@ -172,6 +173,8 @@ class CallBack(object):
+         points = np.frombuffer(lidar_data.raw_data, dtype=np.dtype('f4'))
+         points = copy.deepcopy(points)
+         points = np.reshape(points, (int(points.shape[0] / 4), 4))
++        if self._perturb_fn is not None:
++            points = np.ascontiguousarray(self._perturb_fn(points, lidar_data.frame), dtype=np.float32)
+         self._data_provider.update_sensor(tag, points, lidar_data.frame)
+ 
+     def _parse_radar_cb(self, radar_data, tag):

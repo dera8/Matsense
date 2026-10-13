@@ -251,6 +251,25 @@ The **Experiment** page runs closed-loop campaigns and compares sensing arms.
 It needs CARLA, the forked PCLA (with the `perturb_fn` hook) and, for scripted
 hazards, ScenarioRunner (`SCENARIO_RUNNER_ROOT`, `CARLA_PYTHONAPI_ROOT`).
 
+### PCLA and the perturb_fn hook
+
+MatSense reaches the agent's LiDAR through a `perturb_fn` argument that the
+official PCLA does not have. Apply the bundled patch once, from the PCLA folder:
+
+```bash
+git apply <path to Matsense>/bundled_toolkit/patches/pcla_perturb_fn.patch
+```
+
+It changes two files (`PCLA.py`, `leaderboard_codes/sensor_interface.py`):
+PCLA gains an optional `perturb_fn=None` and calls it on every LiDAR cloud
+before the agent sees it. Without it PCLA behaves exactly as before. The
+Experiment page refuses to start a campaign on an unpatched PCLA.
+
+When CARLA runs inside the Unreal editor (`make launch`), open the campaign's
+town (for example `Content/Carla/Maps/Town02`) before pressing Play: the
+recorder only loads a map when the one already open differs, and loading maps
+from the client is unreliable in the editor.
+
 ### Campaign
 
 Set the PCLA directory, the route XML, the agent (default `lav_lav`, the

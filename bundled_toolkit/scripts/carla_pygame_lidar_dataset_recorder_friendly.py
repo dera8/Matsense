@@ -42,6 +42,7 @@ import os
 from collections import OrderedDict, deque
 import json
 import math
+import signal
 import sys
 import traceback
 import threading
@@ -5627,6 +5628,12 @@ def build_argparser():
 
 
 def main():
+    # On Windows the campaign runner stops a run with CTRL_BREAK, which Python
+    # would otherwise answer by exiting on the spot, leaving the ego, sensors
+    # and hazard actors in the CARLA world. Treat it like Ctrl+C so destroy()
+    # below runs.
+    if hasattr(signal, "SIGBREAK"):
+        signal.signal(signal.SIGBREAK, signal.default_int_handler)
     args = build_argparser().parse_args()
     tool_config, config_path = load_tool_config(args.material_config)
     profile_name, profile = get_profile(tool_config, args.profile_name)
