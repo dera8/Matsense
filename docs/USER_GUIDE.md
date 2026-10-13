@@ -265,11 +265,19 @@ PCLA gains an optional `perturb_fn=None` and calls it on every LiDAR cloud
 before the agent sees it. Without it PCLA behaves exactly as before. The
 Experiment page refuses to start a campaign on an unpatched PCLA.
 
-If CARLA has another map open, **Start campaign** and **Resume** load the
-campaign's town first, allowing up to ten minutes: in the Unreal editor the
-first load of a map compiles its shaders and takes far longer than the
-recorder's own 60 s limit. If the editor refuses the switch, the page says so;
-then stop Play, open the town from `Content > Carla > Maps` and press Play.
+Open the campaign's town in CARLA before starting: in the Unreal editor, stop
+Play, open it from `Content > Carla > Maps` and press Play. **Start campaign**
+refuses to run when another map is open. Switching maps from Python crashed the
+editor's renderer in testing, so the page only does it when "Let the app switch
+the map" is ticked, which is meant for a packaged CARLA.
+
+"Follow the ego vehicle in the CARLA window" (on by default) moves CARLA's own
+camera behind the car, so a run can be watched in the simulator even when the
+pygame window is off.
+
+**GPU note.** RTX 50-series cards (Blackwell) need PyTorch built for CUDA 12.8
+or later; with older builds LAV fails at start-up with "no kernel image is
+available for execution on the device".
 
 ### Campaign
 

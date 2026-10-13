@@ -1770,7 +1770,7 @@ def same_town(a: str, b: str) -> bool:
     return norm(a) == norm(b)
 
 
-def ensure_town(toolkit_dir: Path, preflight: dict, town: str, timeout_s: float = 600.0) -> str:
+def ensure_town(toolkit_dir: Path, preflight: dict, town: str, allow_load: bool, timeout_s: float = 600.0) -> str:
     """Make CARLA show `town`, loading it if another map is open. "" on success.
 
     The recorder would switch maps itself, but with a 60 s limit that the
@@ -1781,6 +1781,15 @@ def ensure_town(toolkit_dir: Path, preflight: dict, town: str, timeout_s: float 
     current = str(preflight.get("map") or "")
     if not town or not current or same_town(current, town):
         return ""
+    if not allow_load:
+        # Switching maps from Python crashed the Unreal editor's renderer in
+        # testing (access violation spawning the first cameras on the new map),
+        # so it is opt-in and meant for a packaged CARLA.
+        return (
+            f"CARLA has {current} open but the campaign drives in {town}. Open {town} in CARLA "
+            f"(in the editor: stop Play, open Content > Carla > Maps > {town}, press Play), or, on a packaged "
+            "CARLA only, tick 'Let the app switch the map' under CARLA connection."
+        )
     with st.spinner(f"CARLA has {current} open: loading {town}. In the editor this can take several minutes…"):
         try:
             proc = subprocess.run(
@@ -1847,6 +1856,8 @@ def build_campaign_plan(toolkit_dir: Path, campaign_dir: Path, c: dict) -> dict:
                             cmd += ["--srunner-param", param]
                     if c["headless"]:
                         cmd += ["--no-draw", "--disable-viewer-cameras"]
+                    if c.get("follow_ego"):
+                        cmd += ["--spectator-follow", "chase"]
                     if c["allow_version_mismatch"]:
                         cmd.append("--allow-version-mismatch")
                     run = {"id": run_id, "arm": arm, "weather": weather, "seed": seed, "replicate": rep, "cmd": cmd}
@@ -1975,6 +1986,11 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
             c1, c2 = st.columns(2)
             scene_seed = c1.number_input("Scene seed", value=int(config.get("seed", 42)), step=1, help="Kept fixed across runs.")
             headless = c2.checkbox("Headless (no pygame drawing, faster)", value=True)
+            follow_ego = st.checkbox(
+                "Follow the ego vehicle in the CARLA window",
+                value=True,
+                help="Moves CARLA's own camera behind the car, so you can watch the run in the simulator window.",
+            )
 
         with st.expander("CARLA connection"):
             c1, c2, c3 = st.columns(3)
@@ -1982,6 +1998,11 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
             port = c2.number_input("Port", value=int(config.get("port", 2000)), step=1)
             tm_port = c3.number_input("Traffic Manager port", value=int(config.get("tm_port", 8000)), step=1)
             allow_version_mismatch = st.checkbox("Allow client/server version mismatch", value=False)
+            allow_map_load = st.checkbox(
+                "Let the app switch the map",
+                value=False,
+                help="For a packaged CARLA. Switching maps from Python can crash the Unreal editor: there, open the town yourself.",
+            )
 
         launch = st.form_submit_button("Start campaign", type="primary")
 
@@ -2024,7 +2045,7 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
         if not problems:
             preflight = check_carla(toolkit_dir, host.strip(), int(port))
             blocker = preflight_blocker(preflight, allow_version_mismatch) or ensure_town(
-                toolkit_dir, preflight, town.strip()
+                toolkit_dir, preflight, town.strip(), allow_map_load
             )
             if blocker:
                 problems.append(blocker)
@@ -2040,14 +2061,16 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
                 "level": float(level), "max_seconds": float(max_seconds), "stopped_seconds": float(stopped_seconds),
                 "route_dev_threshold": float(route_dev_threshold), "dropout_gain": float(dropout_gain),
                 "jitter_gain": float(jitter_gain), "spawn_jitter_m": float(spawn_jitter_m),
-                "scene_seed": int(scene_seed), "headless": headless, "host": host.strip(), "port": int(port),
+                "scene_seed": int(scene_seed), "headless": headless, "follow_ego": follow_ego, "host": host.strip(), "port": int(port),
                 "tm_port": int(tm_port), "allow_version_mismatch": allow_version_mismatch,
+                "allow_map_load": allow_map_load,
             }
             campaign_dir.mkdir(parents=True, exist_ok=True)
             plan = build_campaign_plan(toolkit_dir, campaign_dir, settings)
             (campaign_dir / "campaign.json").write_text(json.dumps(plan, indent=1), encoding="utf-8")
             start_campaign(toolkit_dir, campaign_dir)
-            st.session_state["exp_selected"] = campaign_dir.name
+            # Show the campaign just started, not whichever one was selected before.
+            st.session_state["exp_status_pick"] = campaign_dir.name
             st.success(f"Campaign {campaign_dir.name} started: {len(plan['runs'])} runs.")
 
     st.subheader("Campaigns")
@@ -2056,9 +2079,10 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
         st.caption(f"No campaigns yet under {CAMPAIGN_ROOT}.")
         return
     names = [c.name for c in campaigns]
+    if st.session_state.get("exp_status_pick") not in names:
+        st.session_state["exp_status_pick"] = names[0]
     selected = st.selectbox(
         "Campaign", names,
-        index=names.index(st.session_state["exp_selected"]) if st.session_state.get("exp_selected") in names else 0,
         key="exp_status_pick",
     )
     campaign_dir = CAMPAIGN_ROOT / selected
@@ -2077,7 +2101,7 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
     if b1.button("Resume", disabled=running or done >= total, help="Runs only what has no summary yet."):
         preflight = check_carla(toolkit_dir, plan["settings"]["host"], plan["settings"]["port"])
         blocker = preflight_blocker(preflight, plan["settings"].get("allow_version_mismatch", False)) or ensure_town(
-            toolkit_dir, preflight, plan["settings"].get("town", "")
+            toolkit_dir, preflight, plan["settings"].get("town", ""), plan["settings"].get("allow_map_load", False)
         )
         if blocker:
             st.error(f"Not resumed: {blocker}")
