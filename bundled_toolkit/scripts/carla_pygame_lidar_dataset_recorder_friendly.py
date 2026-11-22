@@ -4513,7 +4513,8 @@ class CarlaLidarViewer:
         # looks for the intensity tolerance threshold.
         _mode_map = {"material": "matsense", "intensity": "standard",
                      "global": "global", "shuffled": "shuffled",
-                     "level": "level"}
+                     "level": "level", "intensity_only": "intensity_only",
+                     "geometry_only": "geometry_only"}
         _session_mode = _mode_map.get(getattr(self.args, "mode", "intensity"), "standard")
         self._pcla_session = ClosedLoopSession(
             self.vehicle, self.world,
@@ -4523,6 +4524,7 @@ class CarlaLidarViewer:
                 dropout_gain=float(getattr(self.args, "pcla_dropout_gain", 0.4)),
                 jitter_gain=float(getattr(self.args, "pcla_jitter_gain", 0.10)),
                 apply_intensity=not bool(getattr(self.args, "pcla_no_intensity", False)),
+                uniform_geometry=str(getattr(self.args, "pcla_uniform_geometry", "matched")),
                 intensity_mode=str(getattr(self.args, "pcla_intensity_mode", "headroom")),
                 seed=int(getattr(self.args, "pcla_perturb_seed", 1234)),
             ),
@@ -4852,6 +4854,7 @@ class CarlaLidarViewer:
                 dropout_gain=float(getattr(self.args, "pcla_dropout_gain", 0.4)),
                 jitter_gain=float(getattr(self.args, "pcla_jitter_gain", 0.10)),
                 apply_intensity=not bool(getattr(self.args, "pcla_no_intensity", False)),
+                uniform_geometry=str(getattr(self.args, "pcla_uniform_geometry", "matched")),
                 intensity_mode=str(getattr(self.args, "pcla_intensity_mode", "headroom")),
                 seed=int(getattr(self.args, "pcla_perturb_seed", 1234)),
             ),
@@ -5420,7 +5423,11 @@ def build_argparser():
                     help="Deterministic seed for parked vehicle blueprint selection")
     ap.add_argument("--weather", choices=["nominal", "rain", "snow"], default="nominal")
     ap.add_argument("--mode", choices=["intensity", "global", "material", "shuffled",
-                                       "level", CAMERA_TRIPLE_MODE], default="global")
+                                       "level", "intensity_only", "geometry_only",
+                                       CAMERA_TRIPLE_MODE], default="global")
+    ap.add_argument("--pcla-uniform-geometry", choices=["matched", "none"], default="matched",
+                    help="whether uniform and shuffled lose and move the same returns as "
+                         "MatSense (matched, the paper's design) or keep every return (none)")
     # LMDrive's rig: four views with its own positions and fields
     # of view, saved next to the clouds. It is needed because its backbone is
     # a fusion model and cannot be queried without its cameras; our recordings

@@ -1695,6 +1695,8 @@ SENSING_ARMS = {
     "uniform": "global",
     "matsense": "material",
     "shuffled": "shuffled",
+    "intensity_only": "intensity_only",
+    "geometry_only": "geometry_only",
     "level": "level",
 }
 # mode -> realisation for summaries without a run id; the first name wins
@@ -1707,6 +1709,8 @@ ARM_HELP = {
     "uniform": "one scalar per frame, at the level MatSense delivers on that frame",
     "matsense": "material- and condition-dependent response from the frozen profile",
     "shuffled": "MatSense factors permuted among the points of each range bin",
+    "intensity_only": "ablation: MatSense intensity, every return kept in place",
+    "geometry_only": "ablation: MatSense return loss and jitter, CARLA intensity",
     "level": "a constant scale chosen here, no dropout or jitter (diagnostics)",
 }
 PAPER_BLOCK = ["unmodified", "unmodified_repeat", "uniform", "matsense", "shuffled"]

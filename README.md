@@ -17,10 +17,14 @@ compares:
 | uniform | one scale per frame, at the level MatSense delivers on that frame | `global` |
 | MatSense | each return scaled by its material and condition, from the frozen profile | `material` |
 | shuffled | MatSense's own factors, permuted among the returns of each range bin | `shuffled` |
+| intensity only / geometry only | the two halves of MatSense, for the ablation (E4) | `intensity_only` / `geometry_only` |
 | level | a constant chosen by configuration, for diagnostics | `level` |
 
-Uniform and shuffled match MatSense's intensity level on every frame, so only a
-difference against them is attributed to the materials.
+Uniform and shuffled match MatSense's intensity level on every frame and, under
+a condition that attenuates a class, lose and move exactly the same returns
+(`--pcla-uniform-geometry matched`, the default), so they differ from MatSense
+in the material structure only and only a difference against them is
+attributed to the materials.
 
 This repository holds **the tool**: the Streamlit dashboard, the CARLA/pygame
 runtime viewer, the material-aware LiDAR response, the dataset recorder, and a
@@ -204,8 +208,15 @@ callback (Section 5.5). For PCLA (commit 07d4d5d, agent `lav_lav`) the hook is
 is applied before a campaign starts. The agent's LiDAR is mounted at
 (0, 0, 2.40) m with 64 channels, 85 m range, 600 000 points/s, 10 Hz and a
 vertical field of view from -30 to +10 degrees; the co-located semantic LiDAR
-completes a full turn per 20 Hz frame (1 300 000 points/s) and returns are
-matched by direction within 0.40 degrees.
+completes a full turn per 20 Hz frame at the agent's angular resolution
+(1 200 000 points/s) and returns are matched by direction within 0.40 degrees.
+Operator settings: λd = 0.4, p_max = 0.55, λj = 0.10, 5 m range bins for the
+shuffled control.
+
+The closed-loop campaigns reported in the paper were run with a standalone
+campaign package (code SHA-256 `1965ab80…`, profile SHA-256 `e3f9708d…`, both
+recorded in every run) that implements this same operator. It is not in this
+repository yet.
 
 ## Not in this repository
 

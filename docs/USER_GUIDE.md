@@ -286,7 +286,8 @@ original LAV; LAV needs CARLA started with `-vulkan`), the town and optionally a
 ScenarioRunner hazard with its parameters. Then choose the design:
 
 ```text
-Realisations   unmodified / unmodified_repeat / uniform / matsense / shuffled / level
+Realisations   unmodified / unmodified_repeat / uniform / matsense / shuffled /
+               intensity_only / geometry_only (ablation) / level
 Conditions     nominal / rain / snow (snow is not calibrated)
 Seeds          one block per seed and condition; default the paper's ten
 Replicates     repeats of a block (default 1: the seed is the unit of analysis)

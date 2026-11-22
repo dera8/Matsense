@@ -432,6 +432,13 @@ class PerturbConfig(NamedTuple):
     # Beyond 60 m nearly every class reads the saturation constant, so the tail
     # is one bin rather than a row of near-empty ones.
     shuffle_bin_edges: tuple = tuple(range(5, 61, 5))
+    # Whether the level-matched controls (uniform, shuffled) remove and move
+    # the same returns MatSense does. "matched" is the paper's design (Section
+    # 6.1): under rain all three lose and displace exactly the same points, drawn
+    # with the same seed, so they differ from MatSense in the intensity channel
+    # only. "none" reproduces the earlier controls, which kept every return.
+    uniform_geometry: str = "matched"    # 'matched' | 'none'
+
 
 
 # ---------------------------------------------------------------------------
@@ -562,6 +569,31 @@ def _weighted_weather_ratio(materials: np.ndarray, weather: str) -> float:
     return float(np.mean(ratios))
 
 
+def _geometry(xyz: np.ndarray, materials: np.ndarray, weather: str,
+              cfg: PerturbConfig, rng: np.random.Generator):
+    """Return loss and range jitter of Eqs. 9-10, shared by every arm that has them.
+
+    One function, so the arms that apply geometry draw exactly the same random
+    numbers in the same order: with the same seed they remove and displace the
+    same returns. Returns (keep mask over the input, kept xyz after jitter).
+    """
+    n = xyz.shape[0]
+    p_drop = _dropout_probs(materials, weather, cfg)
+    # an unmeasured class loses no returns either: dropout is derived from
+    # alpha, so a carried-over alpha would delete points on a coefficient
+    # nobody estimated
+    p_drop = _apply_policy(p_drop, _as_codes(materials), cfg.unsupported_policy, neutral=0.0)
+    keep = rng.random(n) >= p_drop
+    xyz2 = xyz[keep].copy()
+    if cfg.jitter_gain > 0 and xyz2.shape[0]:
+        dirs = xyz2 / np.maximum(np.linalg.norm(xyz2, axis=1, keepdims=True), 1e-6)
+        # as before this was shared: jitter follows the class's raw dropout
+        # probability, so the MatSense arm moves the same points it always did
+        jitter_scale = cfg.jitter_gain * _dropout_probs(materials[keep], weather, cfg)[:, None]
+        xyz2 = xyz2 + dirs * (rng.standard_normal((xyz2.shape[0], 1)) * jitter_scale)
+    return keep, xyz2
+
+
 def matsense_perturb(
     xyz: np.ndarray,
     intensity: np.ndarray,
@@ -580,6 +612,12 @@ def matsense_perturb(
     mode = 'matsense'  -> material/weather dropout + jitter + intensity (proposed)
     mode = 'shuffled'  -> MatSense's own factors, permuted between points
                           within range bins (material-assignment control)
+    mode = 'intensity_only' / 'geometry_only' -> the two halves of 'matsense'
+                          (ablation)
+
+    With cfg.uniform_geometry == 'matched' (default), 'global' and 'shuffled'
+    lose and move exactly the returns 'matsense' does, so the three differ in
+    the intensity channel only.
 
     xyz:        (N, 3) float32   — LiDAR xyz in sensor frame
     intensity:  (N,)   float32   — raw CARLA intensity [0, 1]
@@ -637,7 +675,11 @@ def matsense_perturb(
         return xyz, (intensity * s).astype(np.float32)
 
     if mode == "global":
-        keep = rng.random(n) >= cfg.global_dropout
+        if cfg.uniform_geometry == "matched":
+            keep, xyz_out = _geometry(xyz, materials, weather, cfg, rng)
+        else:
+            keep = rng.random(n) >= cfg.global_dropout
+            xyz_out = xyz[keep]
         if record is not None:
             record["keep"] = keep
         if cfg.intensity_mode == "headroom":
@@ -657,31 +699,34 @@ def matsense_perturb(
                 float(np.mean(f)) if f.size else 1.0)
         else:
             scale = _weighted_weather_ratio(materials, weather)
-        return xyz[keep], intensity[keep] * scale
+        return xyz_out, intensity[keep] * scale
 
-    if mode == "matsense":
-        # 1) Per-material dropout — moves geometry-based planners (BEV occupancy)
-        p_drop = _dropout_probs(materials, weather, cfg)
-        # an unmeasured class loses no returns either: dropout is derived from
-        # alpha, so a carried-over alpha would delete points on a coefficient
-        # nobody estimated
-        p_drop = _apply_policy(p_drop, _as_codes(materials),
-                               cfg.unsupported_policy, neutral=0.0)
-        keep = rng.random(n) >= p_drop
+    if mode == "geometry_only":
+        # Ablation (E4): MatSense's return loss and jitter, CARLA's intensity.
+        keep, xyz2 = _geometry(xyz, materials, weather, cfg, rng)
         if record is not None:
             record["keep"] = keep
-        xyz2 = xyz[keep].copy()
+        return xyz2, intensity[keep]
+
+    if mode == "intensity_only":
+        # Ablation (E4): MatSense's intensity, every return kept in place.
+        if record is not None:
+            record["keep"] = np.ones(n, dtype=bool)
+        f = _apply_policy(_contrast_factors(materials, weather), _as_codes(materials),
+                          cfg.unsupported_policy)
+        return xyz, np.clip(intensity * f, 0.0, 1.0).astype(np.float32)
+
+    if mode == "matsense":
+        # 1-2) return loss and range jitter (Eqs. 9-10), shared with the
+        # level-matched controls so they move exactly the same returns
+        keep, xyz2 = _geometry(xyz, materials, weather, cfg, rng)
+        if record is not None:
+            record["keep"] = keep
         inten2 = intensity[keep].copy()
         mat2 = materials[keep]
 
         if xyz2.shape[0] == 0:
             return xyz2, inten2
-
-        # 2) Range jitter on strongly attenuated surfaces (wet asphalt, wet sidewalk)
-        if cfg.jitter_gain > 0:
-            dirs = xyz2 / np.maximum(np.linalg.norm(xyz2, axis=1, keepdims=True), 1e-6)
-            jitter_scale = cfg.jitter_gain * _dropout_probs(mat2, weather, cfg)[:, None]
-            xyz2 = xyz2 + dirs * (rng.standard_normal((xyz2.shape[0], 1)) * jitter_scale)
 
         # 3) Runtime intensity follows the paper form exactly: I' = beta_m * alpha_m,c * I_sim.
         if cfg.apply_intensity:
@@ -725,13 +770,20 @@ def matsense_perturb(
         # measured carries a factor of exactly 1 under the identity policy, and
         # letting those into the pool would inject ones into measured classes
         # and dilute the very structure the arm exists to misplace.
+        if cfg.uniform_geometry == "matched":
+            # the same returns lost and moved as under MatSense, then the
+            # factors permuted among what is left
+            keep, xyz_out = _geometry(xyz, materials, weather, cfg, rng)
+        else:
+            keep, xyz_out = np.ones(n, dtype=bool), xyz
+        xyz, intensity, materials = xyz[keep], intensity[keep], materials[keep]
         f = _apply_policy(_contrast_factors(materials, weather),
                           _as_codes(materials), cfg.unsupported_policy)
         sup = _supported_mask(_as_codes(materials))
         if record is not None:
-            record["keep"] = np.ones(n, dtype=bool)
+            record["keep"] = keep
         if not sup.any():
-            return xyz, np.clip(intensity * f, 0.0, 1.0).astype(np.float32)
+            return xyz_out, np.clip(intensity * f, 0.0, 1.0).astype(np.float32)
         r = np.linalg.norm(xyz, axis=1)
         # np.digitize on a fixed ladder rather than quantiles: a fixed ladder
         # gives every arm and every scene the same bins, so two runs can be
@@ -755,10 +807,10 @@ def matsense_perturb(
         if record is not None:
             record["shuffle_moved_frac"] = _SHUFFLE_COVERAGE[-1]
             record["shuffle_supported_frac"] = float(sup.mean())
-        return xyz, np.clip(intensity * out, 0.0, 1.0).astype(np.float32)
+        return xyz_out, np.clip(intensity * out, 0.0, 1.0).astype(np.float32)
 
     raise ValueError(f"Unknown mode '{mode}'. Expected: standard | global | level | "
-                     "matsense | shuffled | pertov")
+                     "matsense | shuffled | intensity_only | geometry_only | pertov")
 
 
 # ---------------------------------------------------------------------------
@@ -921,7 +973,11 @@ class ClosedLoopSession:
     # z comes from the agent's own config (lav/config.yaml: camera_z), not from
     # the example in autonomous_agent's docstring, which describes a different
     # mounting and is what made an earlier attempt at this worse.
-    _FALLBACK_LIDAR = dict(channels="64", range="85", points_per_second="1300000",
+    # A full turn per 20 Hz frame at the agent's angular resolution: the
+    # agent's 600 000 points/s at 10 Hz become 1 200 000 at 20 Hz (paper,
+    # Section 5.1; what the campaign code does). Earlier versions used a fixed
+    # 1 300 000, slightly denser than the agent's sensor.
+    _FALLBACK_LIDAR = dict(channels="64", range="85", points_per_second="1200000",
                            rotation_frequency="20", upper_fov="10", lower_fov="-30")
     _FALLBACK_POSE = (0.0, 0.0, 2.4)
     # How the AGENT's sensor is recognised among the several ray-cast LiDARs on
@@ -978,9 +1034,20 @@ class ClosedLoopSession:
 
         attrs = dict(best.attributes)
         spec = dict(self._FALLBACK_LIDAR)
-        for k in ("range", "upper_fov", "lower_fov"):   # geometry, not sampling
+        for k in ("range", "upper_fov", "lower_fov", "channels"):   # geometry
             if k in attrs:
                 spec[k] = attrs[k]
+        # Sampling: the agent's own density, scaled so the mirror completes a
+        # full turn every frame (rotation = simulation rate).
+        try:
+            fps = 1.0 / float(world.get_settings().fixed_delta_seconds or 0.05)
+            rot = float(attrs.get("rotation_frequency", fps))
+            pps = float(attrs.get("points_per_second", 0))
+            if pps > 0 and rot > 0:
+                spec["points_per_second"] = str(int(round(pps * max(fps, rot) / rot)))
+                spec["rotation_frequency"] = str(max(fps, rot))
+        except Exception:                                  # noqa: BLE001
+            pass
         inv = np.array(vehicle.get_transform().get_inverse_matrix())
         rel = inv @ np.array(best.get_transform().get_matrix())
         loc = carla.Location(x=float(rel[0, 3]), y=float(rel[1, 3]), z=float(rel[2, 3]))
