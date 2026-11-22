@@ -4,6 +4,7 @@ import csv
 import json
 import math
 import os
+import random
 import re
 import signal
 import socket
@@ -1684,23 +1685,32 @@ def profile_browser(toolkit_dir: Path | None) -> None:
             st.json(profile)
 
 
-# Sensing arms of the closed-loop study (paper Section 5.2) and the viewer
-# --mode value that selects each one when a PCLA agent drives.
+# Sensing realisations of the closed-loop study, named as in the paper
+# (Section 5.2), and the viewer --mode value that selects each one when a PCLA
+# agent drives. `unmodified_repeat` is the second unmodified execution every
+# block carries (Section 6.4): what the simulation varies on its own.
 SENSING_ARMS = {
-    "standard": "intensity",
-    "global": "global",
+    "unmodified": "intensity",
+    "unmodified_repeat": "intensity",
+    "uniform": "global",
     "matsense": "material",
     "shuffled": "shuffled",
     "level": "level",
 }
-ARM_BY_MODE = {mode: arm for arm, mode in SENSING_ARMS.items()}
+# mode -> realisation for summaries without a run id; the first name wins
+ARM_BY_MODE = {}
+for _arm, _mode in SENSING_ARMS.items():
+    ARM_BY_MODE.setdefault(_mode, _arm)
 ARM_HELP = {
-    "standard": "CARLA's own response, unchanged",
-    "global": "one scalar per frame, at the level MatSense would deliver",
-    "matsense": "material- and condition-dependent response from the profile",
-    "shuffled": "MatSense factors permuted among points in range bins",
-    "level": "a constant scale chosen here, no dropout or jitter",
+    "unmodified": "CARLA's own response, unchanged",
+    "unmodified_repeat": "a second unmodified run in the same block, the noise reference",
+    "uniform": "one scalar per frame, at the level MatSense delivers on that frame",
+    "matsense": "material- and condition-dependent response from the frozen profile",
+    "shuffled": "MatSense factors permuted among the points of each range bin",
+    "level": "a constant scale chosen here, no dropout or jitter (diagnostics)",
 }
+PAPER_BLOCK = ["unmodified", "unmodified_repeat", "uniform", "matsense", "shuffled"]
+PAPER_SEEDS = "1101, 2202, 3303, 4404, 5505, 6606, 7707, 8808, 9909, 1010"
 OUTCOME_METRICS = {
     "route_completion_ratio": "Route completion (fraction)",
     "route_completion_m": "Route completion (m)",
@@ -1816,54 +1826,62 @@ def build_campaign_plan(toolkit_dir: Path, campaign_dir: Path, c: dict) -> dict:
     material_config = toolkit_dir / "configs" / "material_aware_tool_config.json"
     scenario_label = safe_name(c["scenario_label"])
     runs = []
+    # A block is one condition and one seed (and replicate); its realisations
+    # run in an order drawn at random per block (Section 6.4), so a realisation
+    # is never confounded with its position in wall-clock time.
+    blocks = []
     for weather in c["conditions"]:
-        for arm in c["arms"]:
-            for seed in c["seeds"]:
-                for rep in range(c["replicates"]):
-                    run_id = f"{scenario_label}__{arm}__{weather}__seed{seed}__rep{rep}"
-                    cmd = [
-                        sys.executable, str(script),
-                        "--host", c["host"], "--port", str(c["port"]), "--tm-port", str(c["tm_port"]),
-                        "--fps", "20",
-                        "--weather", weather,
-                        "--mode", SENSING_ARMS[arm],
-                        "--material-config", str(material_config),
-                        "--profile-name", c["profile"],
-                        "--dataset-root", str(campaign_dir),
-                        "--scene-id", "runs",
-                        "--scenario-name", run_id,
-                        "--seed", str(c["scene_seed"]),
-                        "--pcla-perturb-seed", str(seed),
-                        "--replicate-index", str(rep),
-                        "--condition-type", scenario_label,
-                        "--pcla-agent", c["agent"],
-                        "--pcla-town", c["town"],
-                        "--pcla-spawn-index", str(c["spawn_index"]),
-                        "--pcla-max-seconds", str(c["max_seconds"]),
-                        "--pcla-stopped-seconds", str(c["stopped_seconds"]),
-                        "--pcla-route-dev-threshold", str(c["route_dev_threshold"]),
-                        "--pcla-spawn-jitter-m", str(c["spawn_jitter_m"]),
-                        "--pcla-dropout-gain", str(c["dropout_gain"]),
-                        "--pcla-jitter-gain", str(c["jitter_gain"]),
-                    ]
-                    if c["pcla_dir"]:
-                        cmd += ["--pcla-dir", c["pcla_dir"]]
-                    if c["route"]:
-                        cmd += ["--pcla-route", c["route"]]
-                    if c["srunner_scenario"]:
-                        cmd += ["--srunner-scenario", c["srunner_scenario"]]
-                        for param in c["srunner_params"]:
-                            cmd += ["--srunner-param", param]
-                    if c["headless"]:
-                        cmd += ["--no-draw", "--disable-viewer-cameras"]
-                    if c.get("follow_ego"):
-                        cmd += ["--spectator-follow", "chase"]
-                    if c["allow_version_mismatch"]:
-                        cmd.append("--allow-version-mismatch")
-                    run = {"id": run_id, "arm": arm, "weather": weather, "seed": seed, "replicate": rep, "cmd": cmd}
-                    if arm == "level":
-                        run["env"] = {"MATSENSE_LEVEL": str(c["level"])}
-                    runs.append(run)
+        for seed in c["seeds"]:
+            for rep in range(c["replicates"]):
+                order = list(c["arms"])
+                if c.get("randomise_order", True):
+                    random.Random(f"{weather}|{seed}|{rep}").shuffle(order)
+                blocks.extend((weather, arm, seed, rep) for arm in order)
+    for weather, arm, seed, rep in blocks:
+        run_id = f"{scenario_label}__{arm}__{weather}__seed{seed}__rep{rep}"
+        cmd = [
+            sys.executable, str(script),
+            "--host", c["host"], "--port", str(c["port"]), "--tm-port", str(c["tm_port"]),
+            "--fps", "20",
+            "--weather", weather,
+            "--mode", SENSING_ARMS[arm],
+            "--material-config", str(material_config),
+            "--profile-name", c["profile"],
+            "--dataset-root", str(campaign_dir),
+            "--scene-id", "runs",
+            "--scenario-name", run_id,
+            "--seed", str(c["scene_seed"]),
+            "--pcla-perturb-seed", str(seed),
+            "--replicate-index", str(rep),
+            "--condition-type", scenario_label,
+            "--pcla-agent", c["agent"],
+            "--pcla-town", c["town"],
+            "--pcla-spawn-index", str(c["spawn_index"]),
+            "--pcla-max-seconds", str(c["max_seconds"]),
+            "--pcla-stopped-seconds", str(c["stopped_seconds"]),
+            "--pcla-route-dev-threshold", str(c["route_dev_threshold"]),
+            "--pcla-spawn-jitter-m", str(c["spawn_jitter_m"]),
+            "--pcla-dropout-gain", str(c["dropout_gain"]),
+            "--pcla-jitter-gain", str(c["jitter_gain"]),
+        ]
+        if c["pcla_dir"]:
+            cmd += ["--pcla-dir", c["pcla_dir"]]
+        if c["route"]:
+            cmd += ["--pcla-route", c["route"]]
+        if c["srunner_scenario"]:
+            cmd += ["--srunner-scenario", c["srunner_scenario"]]
+            for param in c["srunner_params"]:
+                cmd += ["--srunner-param", param]
+        if c["headless"]:
+            cmd += ["--no-draw", "--disable-viewer-cameras"]
+        if c.get("follow_ego"):
+            cmd += ["--spectator-follow", "chase"]
+        if c["allow_version_mismatch"]:
+            cmd.append("--allow-version-mismatch")
+        run = {"id": run_id, "arm": arm, "weather": weather, "seed": seed, "replicate": rep, "cmd": cmd}
+        if arm == "level":
+            run["env"] = {"MATSENSE_LEVEL": str(c["level"])}
+        runs.append(run)
     return {
         "name": campaign_dir.name,
         "created": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1904,7 +1922,9 @@ def load_campaign_summaries(campaign_dir: Path, settle_s: float, harness_modes: 
         except (OSError, ValueError):
             continue
         d["run_id"] = f.parent.name
-        d["arm"] = ARM_BY_MODE.get(str(d.get("mode", "")), str(d.get("mode", "?")))
+        parts = f.parent.name.split("__")
+        d["arm"] = (parts[1] if len(parts) > 2 and parts[1] in SENSING_ARMS
+                    else ARM_BY_MODE.get(str(d.get("mode", "")), str(d.get("mode", "?"))))
         d["harness_failure"] = d.get("termination_mode") in harness_modes
         d["completed"] = d.get("termination_mode") == "completed"
         rows.append(d)
@@ -1962,19 +1982,26 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
         st.markdown("**Design**")
         c1, c2 = st.columns(2)
         arms = c1.multiselect(
-            "Sensing arms", list(SENSING_ARMS), default=["standard", "global", "matsense"],
+            "Sensing realisations", list(SENSING_ARMS), default=PAPER_BLOCK,
             help="; ".join(f"{a}: {d}" for a, d in ARM_HELP.items()),
         )
         conditions = c2.multiselect("Conditions", WEATHER_OPTIONS, default=["nominal", "rain"])
         c1, c2, c3 = st.columns(3)
-        seeds_text = c1.text_input("Perturbation seeds", value="1, 2, 3")
-        replicates = c2.number_input("Replicates per cell", value=3, min_value=1, step=1)
+        seeds_text = c1.text_input(
+            "Perturbation seeds", value=PAPER_SEEDS,
+            help="One block per seed and condition. The paper uses these ten; the seed, "
+            "not the replicate, is the unit of analysis.")
+        replicates = c2.number_input(
+            "Replicates per block", value=1, min_value=1, step=1,
+            help="Repeats of a block with the same seed are not independent observations.")
         level = c3.number_input("Level (only for the level arm)", value=1.0, min_value=0.0, step=0.05)
 
         with st.expander("Run limits and operator"):
             c1, c2, c3 = st.columns(3)
             max_seconds = c1.number_input("Max simulated time (s)", value=35.0, min_value=0.0, step=5.0, help="0 = no limit.")
-            stopped_seconds = c2.number_input("End after stationary for (s)", value=4.0, min_value=0.0, step=1.0)
+            stopped_seconds = c2.number_input(
+                "End after stationary for (s)", value=12.0, min_value=0.0, step=1.0,
+                help="12 s as in the paper: an agent yielding to a crossing vehicle waits longer than 4 s.")
             route_dev_threshold = c3.number_input("End above route deviation (m)", value=5.0, min_value=0.0, step=0.5)
             c1, c2, c3 = st.columns(3)
             dropout_gain = c1.number_input("Dropout gain", value=0.4, min_value=0.0, step=0.05)
@@ -2013,7 +2040,7 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
         st.error("Seeds must be integers separated by commas.")
     n_runs = len(arms) * len(conditions) * len(seeds) * int(replicates)
     st.info(
-        f"{len(arms)} arms × {len(conditions)} conditions × {len(seeds)} seeds × {int(replicates)} replicates "
+        f"{len(arms)} realisations × {len(conditions)} conditions × {len(seeds)} seeds × {int(replicates)} replicates "
         f"= **{n_runs} runs**, each capped at {max_seconds:g} s of simulated time."
     )
     for condition in conditions:
@@ -2021,7 +2048,7 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
             st.warning(UNMEASURED_CONDITIONS[condition])
     if agent.strip().startswith(("lav_", "lbc_", "wor_")):
         st.caption("This agent family needs CARLA started with the -vulkan flag.")
-    if "nominal" in conditions and set(arms) & {"global", "matsense", "shuffled"}:
+    if "nominal" in conditions and set(arms) & {"uniform", "matsense", "shuffled"}:
         st.caption(
             "Under nominal conditions every alpha is 1, so no return is dropped or moved: "
             "the arms differ only in intensity there."
@@ -2030,7 +2057,7 @@ def experiment_campaign(toolkit_dir: Path, config: dict) -> None:
     if launch:
         problems = []
         if not arms or not conditions or not seeds:
-            problems.append("choose at least one arm, one condition and one seed")
+            problems.append("choose at least one realisation, one condition and one seed")
         if not agent.strip():
             problems.append("give the PCLA agent name")
         if pcla_dir and not Path(pcla_dir).is_dir():
@@ -2216,7 +2243,7 @@ def experiment_results(toolkit_dir: Path | None) -> None:
     arms_present = sorted(valid["arm"].unique())
     baseline = st.selectbox(
         "Baseline arm", arms_present,
-        index=arms_present.index("standard") if "standard" in arms_present else 0, key="exp_baseline",
+        index=arms_present.index("unmodified") if "unmodified" in arms_present else 0, key="exp_baseline",
     )
     st.caption(
         "Runs are paired on condition, seed and replicate, so each difference compares the same "

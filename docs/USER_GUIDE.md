@@ -247,7 +247,7 @@ which is useful for the `swap_*` and `shuffled_*` control profiles.
 
 ## 4c. Experiment
 
-The **Experiment** page runs closed-loop campaigns and compares sensing arms.
+The **Experiment** page runs closed-loop campaigns and compares sensing realisations.
 It needs CARLA, the forked PCLA (with the `perturb_fn` hook) and, for scripted
 hazards, ScenarioRunner (`SCENARIO_RUNNER_ROOT`, `CARLA_PYTHONAPI_ROOT`).
 
@@ -286,11 +286,18 @@ original LAV; LAV needs CARLA started with `-vulkan`), the town and optionally a
 ScenarioRunner hazard with its parameters. Then choose the design:
 
 ```text
-Sensing arms   standard (CARLA's response) / global / matsense / shuffled / level
+Realisations   unmodified / unmodified_repeat / uniform / matsense / shuffled / level
 Conditions     nominal / rain / snow (snow is not calibrated)
-Seeds          perturbation seeds, e.g. 1, 2, 3
-Replicates     repetitions of each cell
+Seeds          one block per seed and condition; default the paper's ten
+Replicates     repeats of a block (default 1: the seed is the unit of analysis)
 ```
+
+The defaults reproduce the paper's design (Section 6.4). A block is one
+condition and one seed and holds five executions: unmodified, a second
+unmodified run (what the simulation varies on its own), uniform, MatSense and
+shuffled, in an order drawn at random for each block. Runs are capped at 35 s
+and end earlier on route completion, after 12 s stationary, or beyond 5 m of
+route deviation.
 
 The page shows how many runs the design produces before you start it.
 **Start campaign** checks CARLA first, writes the plan to
@@ -311,14 +318,14 @@ logs/<run>.log                 recorder output, for failed runs
 
 ### Results
 
-- outcomes per arm and condition: runs, completions, collisions, stops, median
+- outcomes per realisation and condition: runs, completions, collisions, stops, median
   route completion and minimum TTC;
-- the share of completed runs per arm, and the distribution of the chosen
+- the share of completed runs per realisation, and the distribution of the chosen
   metric;
-- a paired comparison against a baseline arm, pairing runs on condition, seed
-  and replicate (mean difference, 95 % interval, Wilcoxon; Fisher for
+- a paired comparison against a baseline realisation (unmodified by default),
+  pairing runs on condition, seed and replicate (mean difference, 95 % interval, Wilcoxon; Fisher for
   completion);
-- run traces: the same situation under each arm, tick by tick;
+- run traces: the same situation under each realisation, tick by tick;
 - **Save results to Evidence** writes the summary to `output_analysis/` with
   its provenance.
 

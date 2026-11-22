@@ -1,14 +1,26 @@
-# MatSense: Material- and Weather-Aware LiDAR Inspection in CARLA
+# MatSense: Material-Aware LiDAR Modeling for Simulation-Based Testing of Autonomous Driving Systems
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.34+-red.svg)
 ![CARLA](https://img.shields.io/badge/CARLA-0.9.16-118AB2.svg)
 ![License](https://img.shields.io/badge/License-TBD-lightgrey.svg)
 
-MatSense measures how a real LiDAR responds to different materials and transfers
-that response into CARLA, so the same scenario can be driven under the
-simulator's own sensing, under a scene-uniform degradation, and under the
-calibrated material-aware response.
+MatSense measures how a real LiDAR responds to different materials, freezes
+that response as a versioned sensing profile, and applies it to the LiDAR
+stream CARLA delivers to the system under test, without modifying the agent.
+The same scenario can then be driven under the sensing realisations the paper
+compares:
+
+| realisation | what the agent receives | `--mode` |
+| --- | --- | --- |
+| unmodified | CARLA's own response | `intensity` |
+| uniform | one scale per frame, at the level MatSense delivers on that frame | `global` |
+| MatSense | each return scaled by its material and condition, from the frozen profile | `material` |
+| shuffled | MatSense's own factors, permuted among the returns of each range bin | `shuffled` |
+| level | a constant chosen by configuration, for diagnostics | `level` |
+
+Uniform and shuffled match MatSense's intensity level on every frame, so only a
+difference against them is attributed to the materials.
 
 This repository holds **the tool**: the Streamlit dashboard, the CARLA/pygame
 runtime viewer, the material-aware LiDAR response, the dataset recorder, and a
@@ -29,16 +41,29 @@ instrument does not transfer to another by rescaling.
 Being precise about which numbers are measured matters more than the numbers
 themselves:
 
-| | status |
-| --- | --- |
-| nominal response, per material | measured |
-| rain ratio, per material | measured for asphalt, building, car, vegetation |
-| rain ratio, sidewalk and fallback | carried over, **not measured** |
-| snow ratios | carried over, **not measured** |
+The frozen profile is `realbag_empirical_v4` (paper, Table 5):
 
-The profile files carry the same statement in their own `notes` field. Snow is
-offered because the simulator can render it, not because it has been calibrated
-against real snow recordings.
+| | asphalt | building | car | sidewalk | vegetation | unknown |
+| --- | --- | --- | --- | --- | --- | --- |
+| nominal β | 0.5472 | 1.0000 | 0.7113 | 0.6529 | 0.8335 | 0.40, declared |
+| rain α | 0.8876 | 0.9774 | 0.9179 | 0.9303 | 0.9713 | 0.70, declared |
+
+- **Measured**: β and α for the five runtime classes. The eight calibration
+  subclasses (building wall and glass; car paint, glass and tyre; asphalt,
+  sidewalk, vegetation) are aggregated onto them, because CARLA tags whole
+  objects (the granularity gap, Section 5.1).
+- **Declared, not measured**: `unknown` and every snow ratio. At runtime a
+  return without a calibrated class is left exactly as CARLA produced it.
+- **Which recordings**: β from three nominal and α from three rainy traversals
+  of the calibration road, with one range model g(R) shared across them
+  (nominal asphalt, equal-population bins, bin means, isotonic fit, 20-60 m).
+  Three nominal and two rainy recordings of a different road are never used for
+  fitting and serve only as the held-out test (E1). A third rainy recording of
+  that road was exported but is neither fitted nor evaluated; that is what the
+  "twelve recordings" in the profile's `notes` refers to.
+
+The profile file is left byte-for-byte as the campaigns used it: its SHA-256 is
+the profile identity every run records.
 
 ## Visual overview
 
@@ -71,8 +96,10 @@ when none is.
 are measured and which declared, the factor applied to CARLA's intensity, and
 the CARLA-class-to-material mapping.
 
-**Experiment.** Plans and runs closed-loop campaigns with a PCLA agent across
-sensing arms, conditions and seeds, then compares the arms on route
+**Experiment.** Plans and runs closed-loop campaigns with a PCLA agent in the
+paper's block design (Section 6.4): one block per condition and seed, holding
+unmodified, a second unmodified run, uniform, MatSense and shuffled in an order
+drawn at random per block. Results compare the realisations on route
 completion, collisions, cross-track error and TTC with paired statistics.
 
 **Dataset Analyzer.** Reads a recorded dataset from
@@ -169,19 +196,30 @@ The analyzer reports frames per scenario, route duration and distance, points
 per frame, projection and known-material ratios, and the response per material
 against CARLA's intensity.
 
+## Agent integration
+
+The operator is a single function, N×4 → M×4, called inside the agent's LiDAR
+callback (Section 5.5). For PCLA (commit 07d4d5d, agent `lav_lav`) the hook is
+`bundled_toolkit/patches/pcla_perturb_fn.patch`; the Experiment page checks it
+is applied before a campaign starts. The agent's LiDAR is mounted at
+(0, 0, 2.40) m with 64 channels, 85 m range, 600 000 points/s, 10 Hz and a
+vertical field of view from -30 to +10 degrees; the co-located semantic LiDAR
+completes a full turn per 20 Hz frame (1 300 000 points/s) and returns are
+matched by direction within 0.40 degrees.
+
 ## Not in this repository
 
-The paper's campaign scripts, calibration and analysis scripts, scenario
-definitions, agent patches (the PCLA fork with the `perturb_fn` hook) and figure
-generators. They are part of the replication package rather than of the tool.
-The Experiment page includes its own generic campaign runner.
+The paper's calibration pipeline, analysis scripts, scenario definitions and
+figure generators. They are part of the replication package rather than of the
+tool. The Experiment page includes its own generic campaign runner.
 
 ## Citation
 
 ```bibtex
 @article{matsense2026,
-  title  = {Material-Aware LiDAR Sensing for Simulation-Based Testing of Autonomous Driving Systems},
-  author = {Russo, Debora and others},
+  title  = {{MatSense}: Material-Aware {LiDAR} Modeling for Simulation-Based Testing of Autonomous Driving Systems},
+  author = {Russo, Debora and Stocco, Andrea and Gambi, Alessio and Mazzocca, Nicola and Vittorini, Valeria},
+  note   = {Submitted to the Journal of Systems and Software},
   year   = {2026},
   doi    = {TBD}
 }

@@ -402,9 +402,12 @@ class PerturbConfig(NamedTuple):
     dropout_gain and dropout_cap must be justified by your ROS-bag statistics
     (max observed return-loss per material class). These defaults are conservative
     starting points — tune them before the submission."""
-    dropout_gain: float = 0.6    # maps (1 - weather_ratio) -> dropout probability
-    dropout_cap: float = 0.55    # never drop more than this fraction of any class
-    jitter_gain: float = 0.10    # range jitter std (m) for strongly attenuated points
+    # lambda_d, p_max and lambda_j of Eqs. 9-10. 0.4 is the value every
+    # campaign ran with (the recorder's --pcla-dropout-gain default); the
+    # dataclass used to say 0.6, which only a caller that built it bare saw.
+    dropout_gain: float = 0.4    # lambda_d: (1 - alpha) -> dropout probability
+    dropout_cap: float = 0.55    # p_max: never drop more than this fraction of a class
+    jitter_gain: float = 0.10    # lambda_j: range jitter std (m) per unit of p
     global_dropout: float = 0.0  # uniform dropout disabled for the 'global' baseline
     seed: int = 1234             # fix + log for determinism (crucial for RQ4)
     # The operator does three separable things: it removes returns, it jitters
@@ -911,7 +914,7 @@ class ClosedLoopSession:
     #
     # The field of view is where the old value did the damage. The mounting was
     # (0, 0, 2.5) against LAV's (0, 0, 2.4), ten centimetres, well inside the
-    # matcher's 0.35 m tolerance. But the band was 2/-24.8 against LAV's 10/-30,
+    # matcher's tolerance at that time (0.35 m, now 0.40 degrees). But the band was 2/-24.8 against LAV's 10/-30,
     # so a third of the agent's channels swept angles the semantic sensor never
     # looked at and could not be labelled at all.
     #
@@ -932,7 +935,7 @@ class ClosedLoopSession:
         """Mirror the LiDAR whose cloud is actually perturbed: the agent's.
 
         The semantic cloud is matched to the agent's cloud point by point, and a
-        partner counts only within 0.35 m, so two sensors mounted apart agree
+        partner counts only within 0.40 degrees, so two sensors mounted apart agree
         almost nowhere. Measured on one scene: co-located, 98.6% of returns carry
         a usable tag; mounted at the transfuser pose while the agent was LAV,
         9.7%. The rest fall through to the declared fallback material, which is
