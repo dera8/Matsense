@@ -1,0 +1,59 @@
+# Phase 1: CARLA native against CARLA + MatSense, no driving agent.
+# One acquisition; every mode is derived from it offline.
+
+carla:
+  host: 127.0.0.1
+  port: 2000
+  timeout_s: 30.0
+  fps: 20              # synchronous mode, as in the paper's campaigns
+  warmup_ticks: 5
+
+scene:
+  town: Town03         # opened by hand in the editor; never loaded from Python
+  ego_blueprint: vehicle.lincoln.mkz_2020
+  poses:
+    source: road       # "road": prescribed path along the lane; "file": JSON poses (ids kept)
+    spawn_index: 1
+    step_m: 2.0
+    n_frames: 150
+    z_offset: 0.0
+    # path: poses.json  # with source: file
+  static_vehicles:     # parked, physics off, so that the vehicle class is represented
+    count: 25
+    seed: 7
+    min_distance_m: 4.0
+    max_distance_m: 60.0
+
+lidar:
+  # The agent's LiDAR of the paper's campaigns (LAV): 64 channels, 85 m,
+  # -30..+10 deg, mounted at 2.40 m. 600 000 points/s at 10 Hz become
+  # 1 200 000 at 20 Hz so that every frame is a full turn. Both the ray-cast
+  # and the semantic LiDAR get these attributes and this mounting.
+  mount_xyz: [0.0, 0.0, 2.40]
+  attributes:
+    channels: 64
+    range: 85
+    points_per_second: 1200000
+    rotation_frequency: 20
+    upper_fov: 10
+    lower_fov: -30
+    # CARLA's own defaults for the ray-cast LiDAR, written explicitly so the
+    # manifest says what RAW is (ignored by the semantic LiDAR)
+    atmosphere_attenuation_rate: 0.004
+    dropoff_general_rate: 0.45
+    dropoff_intensity_limit: 0.8
+    dropoff_zero_intensity: 0.4
+    noise_stddev: 0.0
+
+modes:
+  profile: ../../campaign/config/profile_realbag_empirical_v4.json
+  condition: nominal   # phase 1 starts nominal, intensity-only
+  tolerance_deg: 0.40  # semantic association, as in the paper
+  range_bin_m: 5.0     # shuffle bins
+  shuffle_seed: 0
+  optional_shuffled_level: true
+
+measure:
+  reference_class: building
+  range_bins_m: [0, 10, 20, 40, 60, 85]
+  band_m: [20, 60]     # the band the profile was estimated in
