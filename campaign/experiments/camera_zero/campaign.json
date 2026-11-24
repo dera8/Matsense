@@ -1,0 +1,117 @@
+{
+ "name": "matsense_camzero_2026-10",
+ "out_dir": "runs/matsense_camzero_2026-10",
+ "carla": {
+  "host": "127.0.0.1",
+  "port": 2000,
+  "timeout_s": 60.0,
+  "fps": 20,
+  "weather": "ClearNoon",
+  "reload_world_each_run": false,
+  "allow_load_world": false
+ },
+ "pcla": {
+  "dir": "C:/Users/debor/Desktop/carla/PCLA",
+  "agent": "lav_lav",
+  "route_format": "pcla_waypoint"
+ },
+ "ego_blueprint": "vehicle.lincoln.mkz_2020",
+ "profile": "config/profile_realbag_empirical_v4.json",
+ "operator": {
+  "dropout_gain": 0.4,
+  "dropout_cap": 0.55,
+  "jitter_gain": 0.1,
+  "range_bin_m": 5.0,
+  "uniform_geometry": "matched",
+  "tolerance_deg": 0.4
+ },
+ "class_shuffle_seed": 21,
+ "scenarios_resolved": "config/scenarios_resolved.json",
+ "scenarios": [
+  {
+   "id": "15",
+   "kind": "invading_bend",
+   "town": "Town02",
+   "enabled": false,
+   "params": {}
+  },
+  {
+   "id": "05",
+   "kind": "red_light",
+   "town": "Town03",
+   "enabled": true,
+   "params": {
+    "candidate_index": 1,
+    "crossing_start_m": 70.0,
+    "crossing_speed": 10.0,
+    "trigger_m": 60.0
+   }
+  },
+  {
+   "id": "09",
+   "kind": "static_cutin",
+   "town": "Town03",
+   "enabled": true,
+   "params": {}
+  },
+  {
+   "id": "16",
+   "kind": "lead_brake",
+   "town": "Town02",
+   "enabled": false,
+   "params": {}
+  },
+  {
+   "id": "18",
+   "kind": "vru_parked",
+   "town": "Town03",
+   "enabled": false,
+   "params": {}
+  }
+ ],
+ "arms": [
+  "unmodified",
+  "uniform",
+  "matsense",
+  "shuffled"
+ ],
+ "conditions": [
+  "nominal",
+  "rain"
+ ],
+ "seeds": [
+  101,
+  202,
+  303,
+  404,
+  505,
+  606,
+  707,
+  808,
+  909,
+  1010
+ ],
+ "replicates": 1,
+ "unmodified_repeat": true,
+ "campaign_seed": 2026,
+ "run": {
+  "max_seconds": 35.0,
+  "stationary_s": 12.0,
+  "deviation_m": 5.0,
+  "never_started_s": 15.0,
+  "terminate_on_collision": false,
+  "dump_points_every": 20
+ },
+ "orchestrator": {
+  "run_timeout_s": 300,
+  "max_retries": 1,
+  "pause_between_runs_s": 3,
+  "carla_restart_cmd": null
+ },
+ "analysis": {
+  "frechet_hz": 5.0,
+  "safety_offset_m": 4.5,
+  "alpha": 0.05
+ },
+ "_note": "Same design as config/campaign.json, scenarios 05 and 09 only; run with tools/run_one_camera.py (camera painting zeroed)."
+}

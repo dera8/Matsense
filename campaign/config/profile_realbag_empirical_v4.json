@@ -1,0 +1,78 @@
+{
+  "name": "realbag_empirical_v4",
+  "default_material": "unknown",
+  "semantic_to_material": {
+    "1": "asphalt",
+    "2": "sidewalk",
+    "3": "building",
+    "4": "building",
+    "9": "vegetation",
+    "14": "car",
+    "15": "car",
+    "16": "car",
+    "18": "car",
+    "19": "car",
+    "24": "asphalt"
+  },
+  "nominal_base": {
+    "asphalt": 0.5472,
+    "building": 1.0,
+    "car": 0.7113,
+    "sidewalk": 0.6529,
+    "vegetation": 0.8335,
+    "unknown": 0.4
+  },
+  "weather_ratio": {
+    "nominal": {
+      "asphalt": 1.0,
+      "building": 1.0,
+      "car": 1.0,
+      "sidewalk": 1.0,
+      "vegetation": 1.0,
+      "unknown": 1.0
+    },
+    "rain": {
+      "asphalt": 0.8876,
+      "building": 0.9774,
+      "car": 0.9179,
+      "sidewalk": 0.9303,
+      "vegetation": 0.9713,
+      "unknown": 0.7
+    },
+    "snow": {
+      "asphalt": 0.493,
+      "building": 0.28,
+      "car": 1.538,
+      "sidewalk": 0.082,
+      "vegetation": 0.652,
+      "unknown": 0.7
+    }
+  },
+  "planar_materials": [
+    "asphalt",
+    "building",
+    "sidewalk"
+  ],
+  "notes": "realbag_empirical_v4, transcribed from Table 3 of the MatSense paper. Differs from v3 in that sidewalk is a MEASURED class (beta 0.3 -> 0.6529, alpha_rain 0.96 -> 0.9303) rather than carried over, plus a fourth-decimal revision of vegetation (0.8329 -> 0.8335, 0.972 -> 0.9713). asphalt, building and car are unchanged from v3. DECLARED, NOT MEASURED: the unknown fallback, and every snow ratio -- snow does not appear in Table 3 and is carried over unchanged from v3, which already flagged it as not measured. Do not report snow results under this profile as empirical. I_MCI = kappa*rho after Laasch et al. 2025, not a reflectance; g(R) shared across bags; band 20-60 m.",
+  "measured_entries": {
+    "nominal_base": [
+      "asphalt",
+      "building",
+      "car",
+      "sidewalk",
+      "vegetation"
+    ],
+    "rain": [
+      "asphalt",
+      "building",
+      "car",
+      "sidewalk",
+      "vegetation"
+    ],
+    "snow": [],
+    "declared": [
+      "unknown",
+      "snow:*"
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+numpy
+scipy
+pandas
+matplotlib
+tabulate
+# carla (PythonAPI of CARLA 0.9.16) and PCLA with its agent dependencies are installed separately

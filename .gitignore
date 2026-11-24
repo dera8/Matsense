@@ -84,3 +84,7 @@ output_analysis/*.gif
 
 # --- app demo capture ---------------------------------------------------------
 .demo_frames/
+
+# campaign outputs
+campaign/runs/
+**/__pycache__/

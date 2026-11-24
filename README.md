@@ -116,6 +116,7 @@ response against CARLA's own intensity per material class and per condition.
 ```
 matsense_streamlit_app
 |-- .streamlit/config.toml
+|-- campaign/             the closed-loop campaigns of the paper (E3, E4, E5, E7)
 |-- bundled_toolkit/
 |   |-- configs/          calibrated profiles and material overrides
 |   |-- scripts/          CARLA runtime: viewer, recorder, response model, campaign runner
@@ -213,16 +214,18 @@ completes a full turn per 20 Hz frame at the agent's angular resolution
 Operator settings: λd = 0.4, p_max = 0.55, λj = 0.10, 5 m range bins for the
 shuffled control.
 
-The closed-loop campaigns reported in the paper were run with a standalone
-campaign package (code SHA-256 `1965ab80…`, profile SHA-256 `e3f9708d…`, both
-recorded in every run) that implements this same operator. It is not in this
-repository yet.
+The closed-loop campaigns reported in the paper were run with the campaign
+package in `campaign/` (code SHA-256 `1965ab80…`, profile SHA-256 `e3f9708d…`,
+both recorded in every run and reproducible from the files in the folder). It
+implements the same operator as the bundled runtime; see `campaign/README.md`.
 
 ## Not in this repository
 
-The paper's calibration pipeline, analysis scripts, scenario definitions and
+The paper's calibration pipeline (from the recordings to the profile) and the
 figure generators. They are part of the replication package rather than of the
-tool. The Experiment page includes its own generic campaign runner.
+tool. The closed-loop campaigns, their scenario definitions and their analysis
+are in `campaign/`; the Experiment page also includes its own generic campaign
+runner.
 
 ## Citation
 

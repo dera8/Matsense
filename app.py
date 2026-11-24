@@ -1714,7 +1714,7 @@ ARM_HELP = {
     "level": "a constant scale chosen here, no dropout or jitter (diagnostics)",
 }
 PAPER_BLOCK = ["unmodified", "unmodified_repeat", "uniform", "matsense", "shuffled"]
-PAPER_SEEDS = "1101, 2202, 3303, 4404, 5505, 6606, 7707, 8808, 9909, 1010"
+PAPER_SEEDS = "101, 202, 303, 404, 505, 606, 707, 808, 909, 1010"  # campaign/config/campaign.json
 OUTCOME_METRICS = {
     "route_completion_ratio": "Route completion (fraction)",
     "route_completion_m": "Route completion (m)",
