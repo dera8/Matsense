@@ -1,0 +1,39 @@
+{
+ "topic": "/sensing/lidar/top/pointcloud_before_sync",
+ "frame_id": "velodyne_top",
+ "mount_xyz": [
+  0.0,
+  0.0,
+  2.4
+ ],
+ "layout": "PointXYZIRC 16 B",
+ "intensity": "uint8(clip(I,0,1)*255)",
+ "channel_from_acquisition": false,
+ "modes": {
+  "RAW": {
+   "bag": "RAW",
+   "messages": 5,
+   "payload_sha256": "02aba3575368bae9bf7300ad699e11be9ee74f90cdb1f30cae9c3f0d7410adae"
+  },
+  "UNIFORM": {
+   "bag": "UNIFORM",
+   "messages": 5,
+   "payload_sha256": "ee4ef81ea68a3f6870926a35cbbf7bd8f1dfb5fe4c74bbab82f1a0ff88d6e74e"
+  },
+  "MATSENSE": {
+   "bag": "MATSENSE",
+   "messages": 5,
+   "payload_sha256": "44fbcd16744a2c615a3f97aaa400e0fa440b2b7e36045606d6eaf5559a42e491"
+  },
+  "SHUFFLED": {
+   "bag": "SHUFFLED",
+   "messages": 5,
+   "payload_sha256": "a31568884b67183aa6b74976c717f25d0a43c567b6f106175a1b24fe62f15746"
+  },
+  "SHUFFLED_LEVEL": {
+   "bag": "SHUFFLED_LEVEL",
+   "messages": 5,
+   "payload_sha256": "8838d23935b0188fb24dfd035a6503d3a7dcb1c0f74c140a0f3fe2706e961f08"
+  }
+ }
+}

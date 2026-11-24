@@ -40,7 +40,10 @@ def frames_from_sequence(root: Path, tol_deg: float):
         d = np.load(f, allow_pickle=False)
         xyz, inten = d["raw_xyz"], d["raw_intensity"]
         tags, matched = match_tags(xyz, d["sem"], tol_deg)
-        yield f.stem, xyz, inten, tags, matched
+        ch = None
+        if "channel_counts" in d.files and int(d["channel_counts"].sum()) == xyz.shape[0]:
+            ch = np.repeat(np.arange(d["channel_counts"].size), d["channel_counts"]).astype(np.uint16)
+        yield f.stem, xyz, inten, tags, matched, ch
 
 
 def frames_from_sample(root: Path):
@@ -48,7 +51,7 @@ def frames_from_sample(root: Path):
         r = np.load(f, allow_pickle=True)
         lab = np.load(root / "lidar_labels" / f.name, allow_pickle=True)
         tags = lab["semantic_tag"].astype(np.int64)
-        yield f.stem, r["xyz"], r["intensity"], np.where(tags < 0, 0, tags), tags >= 0
+        yield f.stem, r["xyz"], r["intensity"], np.where(tags < 0, 0, tags), tags >= 0, None
 
 
 def main() -> int:
@@ -90,14 +93,15 @@ def main() -> int:
                   "note": "semantic_tag from the recorder; -1 means no tag (camera-projected labels)"}
 
     per_frame = []
-    for name, xyz, inten, tags, matched in it:
+    for name, xyz, inten, tags, matched, ch in it:
         cls = classes_for(tags, matched, profile)
         ints, diag = make_modes(xyz, inten, cls, profile, st, with_optional="SHUFFLED_LEVEL" in modes)
         xyz32 = np.asarray(xyz, dtype=np.float32)
         for m in modes:
             np.savez_compressed(out / "modes" / m / f"{name}.npz", xyz=xyz32, intensity=ints[m])
+        extra = {} if ch is None else {"channel": ch}
         np.savez_compressed(out / "labels" / f"{name}.npz", tag=tags.astype(np.int32),
-                            matched=matched.astype(bool), cls=cls.astype(np.int32))
+                            matched=matched.astype(bool), cls=cls.astype(np.int32), **extra)
         per_frame.append({"frame": name, **diag})
         print(f"  {name}: n={diag['n']} supported={diag['n_supported']} unmatched={diag['n_unmatched']} "
               f"unmapped={diag['n_unmapped']} s={diag['uniform_scale']:.4f} "

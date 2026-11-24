@@ -13,6 +13,7 @@ differ in sampling.
 Per frame it writes frames/<frame>.npz with
 
     raw_xyz (N,3) float32, raw_intensity (N,) float32     ray-cast LiDAR
+    channel_counts (channels,) int32                       points per ring, in order
     sem (M,) structured x,y,z,CosAngle,ObjIdx,ObjTag      semantic LiDAR
     pose  [x, y, z, roll, pitch, yaw] of the ego (world)
     sensor_to_world (4,4)                                  LiDAR pose (world)
@@ -209,8 +210,12 @@ def main() -> int:
             s2w = np.array(s_tr.get_matrix())
             w2s = np.array(s_tr.get_inverse_matrix())
             e_tr = ego.get_transform()
+            # points come grouped by channel; the counts give each point's ring,
+            # as autoware_carla_interface derives its `channel` field
+            ch_counts = np.array([raw.get_point_count(c) for c in range(raw.channels)], dtype=np.int32)
             np.savez_compressed(out / "frames" / f"{frame:08d}.npz",
                                 raw_xyz=pts[:, :3].copy(), raw_intensity=pts[:, 3].copy(), sem=semd,
+                                channel_counts=ch_counts,
                                 pose=np.array([e_tr.location.x, e_tr.location.y, e_tr.location.z,
                                                e_tr.rotation.roll, e_tr.rotation.pitch, e_tr.rotation.yaw]),
                                 sensor_to_world=s2w, pose_id=str(p["id"]))

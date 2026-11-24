@@ -1,0 +1,48 @@
+{
+ "verdict": "PASS",
+ "fails": [],
+ "changed_vs_raw": {
+  "RAW": 0.0,
+  "UNIFORM": 1.0,
+  "MATSENSE": 0.1461829994585815,
+  "SHUFFLED": 0.1461829994585815,
+  "SHUFFLED_LEVEL": 0.14649238146801763
+ },
+ "byte_contrast": {
+  "RAW": {
+   "asphalt": 1.0043859649122806,
+   "building": 1.0,
+   "car": 0.9736842105263158,
+   "sidewalk": 0.9824561403508771,
+   "vegetation": 0.9692982456140351
+  },
+  "UNIFORM": {
+   "asphalt": 1.0046728971962617,
+   "building": 1.0,
+   "car": 0.9766355140186916,
+   "sidewalk": 0.9813084112149533,
+   "vegetation": 0.9719626168224299
+  },
+  "MATSENSE": {
+   "asphalt": 0.5482456140350878,
+   "building": 1.0,
+   "car": 0.6929824561403509,
+   "sidewalk": 0.6403508771929824,
+   "vegetation": 0.8114035087719298
+  },
+  "SHUFFLED": {
+   "asphalt": 1.009090909090909,
+   "building": 1.0,
+   "car": 0.9818181818181818,
+   "sidewalk": 0.8868778280542986,
+   "vegetation": 0.9545454545454546
+  },
+  "SHUFFLED_LEVEL": {
+   "asphalt": 1.009090909090909,
+   "building": 1.0,
+   "car": 0.9818181818181818,
+   "sidewalk": 0.8868778280542986,
+   "vegetation": 0.9545454545454546
+  }
+ }
+}

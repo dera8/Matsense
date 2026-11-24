@@ -1,0 +1,122 @@
+{
+ "frames": [
+  {
+   "frame": "frame_301852",
+   "n": 25905,
+   "supported_share": 0.1884192240880139,
+   "unmatched_share": 0.7555684230843467,
+   "unmapped_share": 0.05601235282763945,
+   "shuffle_level_residual": 2.140545182134713e-06,
+   "clipped": {
+    "RAW": 0,
+    "UNIFORM": 0,
+    "MATSENSE": 0,
+    "SHUFFLED": 0,
+    "SHUFFLED_LEVEL": 0
+   }
+  },
+  {
+   "frame": "frame_301862",
+   "n": 25656,
+   "supported_share": 0.19005300904271905,
+   "unmatched_share": 0.7562753352042407,
+   "unmapped_share": 0.053671655753040226,
+   "shuffle_level_residual": 5.405376881494402e-06,
+   "clipped": {
+    "RAW": 0,
+    "UNIFORM": 0,
+    "MATSENSE": 0,
+    "SHUFFLED": 0,
+    "SHUFFLED_LEVEL": 0
+   }
+  },
+  {
+   "frame": "frame_301872",
+   "n": 25858,
+   "supported_share": 0.19231959161574755,
+   "unmatched_share": 0.7530744837187717,
+   "unmapped_share": 0.054605924665480705,
+   "shuffle_level_residual": 5.716230180588933e-06,
+   "clipped": {
+    "RAW": 0,
+    "UNIFORM": 0,
+    "MATSENSE": 0,
+    "SHUFFLED": 0,
+    "SHUFFLED_LEVEL": 0
+   }
+  },
+  {
+   "frame": "frame_301882",
+   "n": 25971,
+   "supported_share": 0.1916753301759655,
+   "unmatched_share": 0.7549189480574487,
+   "unmapped_share": 0.053405721766585805,
+   "shuffle_level_residual": 6.504092406135294e-06,
+   "clipped": {
+    "RAW": 0,
+    "UNIFORM": 0,
+    "MATSENSE": 0,
+    "SHUFFLED": 0,
+    "SHUFFLED_LEVEL": 0
+   }
+  },
+  {
+   "frame": "frame_301892",
+   "n": 25872,
+   "supported_share": 0.19136518243661102,
+   "unmatched_share": 0.7557591218305504,
+   "unmapped_share": 0.05287569573283859,
+   "shuffle_level_residual": 8.064420515275204e-06,
+   "clipped": {
+    "RAW": 0,
+    "UNIFORM": 0,
+    "MATSENSE": 0,
+    "SHUFFLED": 0,
+    "SHUFFLED_LEVEL": 0
+   }
+  }
+ ],
+ "checks": {
+  "geometry": {
+   "pass": 25,
+   "fail": 0,
+   "examples": []
+  },
+  "raw": {
+   "pass": 5,
+   "fail": 0,
+   "examples": []
+  },
+  "operator_A": {
+   "pass": 5,
+   "fail": 0,
+   "examples": []
+  },
+  "uniform": {
+   "pass": 5,
+   "fail": 0,
+   "examples": []
+  },
+  "shuffled": {
+   "pass": 5,
+   "fail": 0,
+   "examples": []
+  },
+  "fallback": {
+   "pass": 5,
+   "fail": 0,
+   "examples": []
+  },
+  "association": {
+   "pass": 0,
+   "fail": 0,
+   "examples": []
+  },
+  "validity": {
+   "pass": 25,
+   "fail": 0,
+   "examples": []
+  }
+ },
+ "verdict": "PASS"
+}

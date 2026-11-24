@@ -88,3 +88,4 @@ output_analysis/*.gif
 # campaign outputs
 campaign/runs/
 **/__pycache__/
+evaluation_v2/data/
